@@ -3,7 +3,7 @@
 import sys
 import os
 from colorama import Fore, Style, init
-from . import config
+import config
 
 # Умовний імпорт для негайного зчитування символу
 try:

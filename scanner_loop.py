@@ -2,34 +2,24 @@
 
 import sys
 import pyperclip
-from . import io_handler
-from . import history
-from . import session_manager
-from . import config
+import io_handler
+import history
+import session_manager
+import config
+import re
 
-def parse_url_args(url):
-    """Розбирає URL на префікс, ID та суфікс."""
-    match = re.search(config.URL_ID_PATTERN, url, re.I)
-    if not match:
-        raise ValueError("Не вдалося знайти шаблон 'id=[number]' у посиланні.")
-    
-    return match.group(1), int(match.group(2)), match.group(3)
-
-def get_target_url(prefix, current_id, suffix):
-    """Складає цільовий URL."""
-    return f"{prefix}{current_id}{suffix}"
-
-def run_scanner_loop(initial_url):
+def run_scanner(initial_url):
     """Основний цикл сканування та взаємодії з користувачем."""
     
     # Ініціалізація
     try:
+        #io_handler.print_message(f"[.] Спроба отримати елементи URL...", color='YELLOW')
         base_url_prefix, current_id, base_url_suffix = parse_url_args(initial_url)
     except ValueError as e:
-        io_handler.print_message(f"Помилка: {e}", color='RED')
+        io_handler.print_message(f"[!] Помилка: {e}", color='RED')
         return
 
-    session = session_manager.FileScannerSession()
+    session = session_manager.FileScannerSession(initial_url)
     history_tracker = history.ScannerHistory()
     
     io_handler.print_message(f"Базове посилання: {base_url_prefix}**[ID]**{base_url_suffix}")
@@ -80,7 +70,8 @@ def run_scanner_loop(initial_url):
                     io_handler.print_message(f"Повернення останнього успішного URL '{last_url}' до буфера обміну. Вихід.")
                 break
 
-        elif status_code == 403:
+        #elif status_code == 403:
+        elif status_code in (403, -1):
             history_tracker.add_error(target_url, status_code)
             
             action = io_handler.handle_403_prompt(current_id)

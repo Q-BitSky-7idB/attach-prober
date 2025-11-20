@@ -11,6 +11,8 @@ SCRAPER_PARAMS = {
     'browser': {'browser': 'chrome', 'platform': 'windows', 'mobile': False}
 }
 
+DEFAULT_TIMEOUT = 30
+
 # --- Шаблон URL ---
 # Регулярний вираз для пошуку та розбиття URL: (префікс)(ID)(суфікс)
 URL_ID_PATTERN = r'(.*id=)(\d+)(.*)'

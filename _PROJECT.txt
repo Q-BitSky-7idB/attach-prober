@@ -1,0 +1,21 @@
+﻿
+[structure]:
+
+ main 
+  ↓ + args:url|help → help
+            ↓
+data_transformer:input_parser
+            ↓
+        loop_scan
+            ↓ + session_init → io_hand → hello-msg
+       ○ while True
+            ↓
+   io_hand:action_listen
+            ↓
+    *decision_manager*
+            ↓                <!>200
+ session_manager:make_probe → session_man:auto_try → io_hand:print(error\problem)+d_handler → icrease\decrease index_number
+            ↓ =200
+        io_hand:print(data_transformer:output_combiner:result)+d_handler       
+            ↓
+        ◙ [again] 
