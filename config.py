@@ -16,6 +16,7 @@ DEFAULT_TIMEOUT = 30
 # --- Шаблон URL ---
 # Регулярний вираз для пошуку та розбиття URL: (префікс)(ID)(суфікс)
 URL_ID_PATTERN = r'(.*id=)(\d+)(.*)'
+URL_ID_SUFIX = 'id='
 
 # --- Керування діями (для io_handler) ---
 ACTIONS = {
