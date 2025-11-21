@@ -14,3 +14,13 @@ def parse_url_from_args(args):
 def get_target_url(prefix, current_id, suffix):
     """Складає цільовий URL."""
     return f"{prefix}{current_id}{suffix}"
+
+def print_history_in_preview(id, status, filename, length):
+    if status==200:
+        io_handler.print_message(f"\n{URL_ID_SUFIX}{id} : {length: >11} : {filename}", color='CYANB')
+    else:
+        io_handler.print_message(f"\n{URL_ID_SUFIX}{id} : Помилка ({status}) або з'єднання/таймаут.", color='REDB')
+        
+def print_result_in_queue(id, status, filename, length):
+    io_handler.overwrite_message(f"\n{URL_ID_SUFIX}{id} : {length: >11} : {filename}", color='GREENB')
+    
