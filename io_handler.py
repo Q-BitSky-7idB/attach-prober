@@ -5,6 +5,10 @@ import os
 from colorama import Fore, Style, init
 import config
 
+LAST_LINE_SIZE = 0
+
+# --- Імпорт rich ---
+
 # Умовний імпорт для негайного зчитування символу
 try:
     import msvcrt
@@ -24,14 +28,27 @@ except ImportError:
 # Ініціалізація кольорів
 init(autoreset=True)
 
+#Fore/Back: BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE, RESET.
+#Style: DIM, NORMAL, BRIGHT, RESET_ALL
+
+#Fore/Back: LIGHTBLACK_EX, LIGHTRED_EX, LIGHTGREEN_EX, LIGHTYELLOW_EX, LIGHTBLUE_EX, LIGHTMAGENTA_EX, LIGHTCYAN_EX, LIGHTWHITE_EX
+
 COLOR_MAP = {
     'GREEN': Fore.GREEN,
     'RED': Fore.RED,
     'YELLOW': Fore.YELLOW,
     'CYAN': Fore.CYAN,
+    'GREENB': Fore.LIGHTGREEN_EX,
+    'CYANB': Fore.LIGHTCYAN_EX,
     'DEFAULT': Style.RESET_ALL,
 }
 
+def printf_message(message, color='DEFAULT'):
+    """Виводить повідомлення з кольором та новим рядком."""
+    sys.stdout.write(f"{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
+    sys.stdout.flush()
+    LAST_LINE_SIZE = len(message)
+    
 def print_message(message, color='DEFAULT'):
     """Виводить повідомлення з кольором та новим рядком."""
     sys.stdout.write(f"{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}\n")
@@ -39,7 +56,7 @@ def print_message(message, color='DEFAULT'):
 
 def overwrite_message(message, color='DEFAULT'):
     """Перезаписує поточний рядок без нового рядка."""
-    sys.stdout.write(f"\r{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
+    sys.stdout.write(f"\r{' ' * LAST_LINE_SIZE +'\r'}{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
     sys.stdout.flush()
 
 def get_action_from_user(options_str):
