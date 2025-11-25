@@ -2,6 +2,8 @@
 
 import re
 import os
+import time
+import urllib.parse
 # Змінюємо імпорт: використовуємо requests з curl_cffi
 from curl_cffi import requests # <-- НОВА БІБЛІОТЕКА
 # Додаємо імпорт для специфічної помилки cURL, яка може бути причиною
@@ -19,6 +21,10 @@ CF_BYPASS_PARAMS = {
     "verify": True, # Залишаємо перевірку SSL
     "allow_redirects": True
 }
+
+# КОНСТАНТИ АДАПТИВНОСТІ
+DEFAULT_TIMEOUT = 15 # Початковий таймаут за замовчуванням
+TIMEOUT_BUFFER_SEC = 5 # Додатковий буфер часу поверх базової затримки
 
 
 class FileScannerSession:
@@ -39,22 +45,22 @@ class FileScannerSession:
 
     def _warmup_session(self, url):
         """Виконує початковий GET-запит для обходу CF та отримання куків."""
-        io_handler.print_message("[/] Спроба 'прогріву' сесії... Обхід CF!")
+        io_handler.print_msg("[/] Спроба 'прогріву' сесії... Обхід CF!")
         
         # Використовуємо self.session для збереження куків
         try:
             # Виконуємо GET, щоб переконатися, що JS-Challenge пройдено і куки збережені
             self.session.get(url, timeout=DEFAULT_TIMEOUT, **CF_BYPASS_PARAMS) 
-            io_handler.print_message("[+] Сесія успішно 'прогріта'!", color='GREEN')
+            io_handler.print_msg("[+] Сесія успішно 'прогріта'!", color='GREEN')
             return True
         except Exception as e:
-            io_handler.print_message(f"Не вдалося 'прогріти' сесію при запуску. \n{e}", color='RED')
+            io_handler.print_msg(f"Не вдалося 'прогріти' сесію при запуску. \n{e}", color='RED')
             return False
 
 
     def renew_session(self, url_to_check):
         """Створює новий об'єкт сесії та намагається перевірити URL для оновлення куків."""
-        io_handler.print_message("Спроба створення нової сесії та обхід CF...")
+        io_handler.print_msg("Спроба створення нової сесії та обхід CF...")
         
         # 1. Створюємо абсолютно нову сесію
         new_session = self._create_session()
@@ -65,10 +71,10 @@ class FileScannerSession:
             
             # 3. Якщо успішно, замінюємо стару сесію на нову
             self.session = new_session
-            io_handler.print_message("Сесія успішно відновлена!", color='GREEN')
+            io_handler.print_msg("Сесія успішно відновлена!", color='GREEN')
             return True
         except Exception as e:
-            io_handler.print_message(f"Не вдалося відновити сесію. {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося відновити сесію. {e}", color='RED')
             return False
 
     
@@ -101,7 +107,7 @@ class FileScannerSession:
     
     def download_fileX(self, url, filename):
         """Виконує завантаження файлу."""
-        io_handler.print_message(f"Розпочато скачування: {filename}")
+        io_handler.print_msg(f"Розпочато скачування: {filename}")
         try:
             # Використовуємо GET-запит з імітацією
             with self.session.get(
@@ -118,9 +124,9 @@ class FileScannerSession:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
                 
-                io_handler.print_message(f"Файл збережено до: {file_path}", color='GREEN')
+                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
         except Exception as e:
-            io_handler.print_message(f"Не вдалося завантажити файл: {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл: {e}", color='RED')
 
     def download_fileY(self, url, filename):
         """
@@ -128,7 +134,7 @@ class FileScannerSession:
         ВИПРАВЛЕНО: Прибрано with навколо self.session.get(), 
         залишено лише with навколо об'єкта відповіді (r).
         """
-        io_handler.print_message(f"Розпочато скачування: {filename}")
+        io_handler.print_msg(f"Розпочато скачування: {filename}")
         try:
             # 1. Виконуємо GET-запит (не використовуємо with тут)
             r = self.session.get(
@@ -149,16 +155,16 @@ class FileScannerSession:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
                 
-                io_handler.print_message(f"Файл збережено до: {file_path}", color='GREEN')
+                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
         except Exception as e:
-            io_handler.print_message(f"Не вдалося завантажити файл: {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл: {e}", color='RED')
 
     def download_fileZ(self, url, filename):
         """
         Виконує завантаження файлу. 
         Розширено обробку винятків для діагностики помилок рівня CurlError.
         """
-        io_handler.print_message(f"Розпочато скачування: {filename}")
+        io_handler.print_msg(f"Розпочато скачування: {filename}")
         r = None # Ініціалізуємо змінну відповіді
         try:
             # 1. Виконуємо GET-запит (не використовуємо with тут)
@@ -179,23 +185,23 @@ class FileScannerSession:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
                 
-                io_handler.print_message(f"Файл збережено до: {file_path}", color='GREEN')
+                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
         
         except CurlError as e:
             # Специфічне захоплення помилок рівня cURL (ConnectionError, Timeout тощо)
-            io_handler.print_message(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
         
         except Exception as e:
             # Загальне захоплення. Виводимо тип помилки, щоб побачити, що саме сталося.
             error_type = type(e).__name__
-            io_handler.print_message(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
 
     def download_fileW(self, url, filename):
         """
         Виконує завантаження файлу. 
         Розширено обробку винятків для діагностики помилок рівня CurlError.
         """
-        io_handler.print_message(f"Розпочато скачування: {filename}")
+        io_handler.print_msg(f"Розпочато скачування: {filename}")
         r = None # Ініціалізуємо змінну відповіді
         try:
             # 1. Виконуємо GET-запит (не використовуємо with тут)
@@ -216,16 +222,16 @@ class FileScannerSession:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
                 
-                io_handler.print_message(f"Файл збережено до: {file_path}", color='GREEN')
+                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
         
         except CurlError as e:
             # Специфічне захоплення помилок рівня cURL (ConnectionError, Timeout тощо)
-            io_handler.print_message(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
         
         except Exception as e:
             # Загальне захоплення. Виводимо тип помилки, щоб побачити, що саме сталося.
             error_type = type(e).__name__
-            io_handler.print_message(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
 
     def download_file(self, url, filename):
         """
@@ -234,7 +240,7 @@ class FileScannerSession:
         Це усуває AttributeError: __enter__, оскільки Response об'єкт curl_cffi 
         не підтримує контекстний менеджер для цього випадку.
         """
-        io_handler.print_message(f"Розпочато скачування: {filename}")
+        io_handler.print_msg(f"Розпочато скачування: {filename}")
         r = None # Ініціалізуємо змінну відповіді
         try:
             # 1. Виконуємо GET-запит (для потокового завантаження)
@@ -254,16 +260,16 @@ class FileScannerSession:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
             
-            io_handler.print_message(f"Файл збережено до: {file_path}", color='GREEN')
+            io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
         
         except CurlError as e:
             # Специфічне захоплення помилок рівня cURL (ConnectionError, Timeout тощо)
-            io_handler.print_message(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
         
         except Exception as e:
             # Загальне захоплення. Виводимо тип помилки, щоб побачити, що саме сталося.
             error_type = type(e).__name__
-            io_handler.print_message(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
+            io_handler.print_msg(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
         
         finally:
             # Обов'язково закриваємо з'єднання, якщо об'єкт r було створено
