@@ -8,41 +8,50 @@ import session_manager
 import config
 import re
 
+def final(history):
+    last_url = history.get_last_successful()
+    if last_url:
+        pyperclip.copy(last_url)
+        io_handler.print_msg(f"[>] Повернення останнього успішного URL '{last_url}' до буфера обміну.\nВихід.")
+
+INIT_URL
+
 def run_scanner(initial_url):
     """Основний цикл сканування та взаємодії з користувачем."""
     
     # Ініціалізація
     try:
-        #io_handler.print_message(f"[.] Спроба отримати елементи URL...", color='YELLOW')
-        base_url_prefix, current_id, base_url_suffix = parse_url_args(initial_url)
+        #io_handler.print_msg(f"[.] Спроба отримати елементи URL...", color='YELLOW')
+        base_url_prefix, current_id, base_url_postfix = parse_url_args(initial_url)
     except ValueError as e:
-        io_handler.print_message(f"[!] Помилка: {e}", color='RED')
+        io_handler.print_msg(f"[!] Помилка: {e}", color='RED')
         return
 
     session = session_manager.FileScannerSession(initial_url)
-    history_tracker = history.ScannerHistory()
+    history_tracker = history.ScannerHistory(initial_url)
     
-    #io_handler.print_message(f"// Базове посилання: {base_url_prefix}**[ID]**{base_url_suffix}")
-    io_handler.print_message(f"// Базове посилання: {base_url_prefix}")
-    io_handler.print_message(f"// Поточний ID: [{current_id}]")
-    if base_url_suffix:
-	io_handler.print_message(f"[+] Закінчення URI: '{base_url_suffix}'")
-    io_handler.printf_message("// Папка завантажень: ")
-    io_handler.print_message(f"{config.DOWNLOAD_DIR}", color='CYAN')
+    #io_handler.print_msg(f"// Базове посилання: {base_url_prefix}**[ID]**{base_url_postfix}")
+    io_handler.print_msg(f"// Базове посилання: {base_url_prefix}")
+    io_handler.print_msg(f"// Поточний ID: [{current_id}]")
+    if base_url_postfix:
+	io_handler.print_msg(f"[+] Закінчення URI: '{base_url_postfix}'")
+    io_handler.printf_msg("// Папка завантажень: ")
+    io_handler.print_msg(f"{config.DOWNLOAD_DIR}", color='CYAN')
 
     # Початкова перевірка сесії
     try:
-        session.check_url_head(get_target_url(base_url_prefix, current_id, base_url_suffix))
-        io_handler.print_message("[+] Сесія ініціалізована успішно!")
+        session.check_url_head(get_target_url(base_url_prefix, current_id, base_url_postfix))
+        io_handler.print_msg("[+] Сесія ініціалізована успішно!\n")
+        #io_handler.begin_listener()
     except Exception:
-        io_handler.print_message("[!] Початкова перевірка не пройшла. Спробуйте 't' (обхід) пізніше.", color='YELLOW')
+        io_handler.print_msg("[!] Початкова перевірка не пройшла. Спробуйте 't' (обхід) пізніше.", color='YELLOW')
 
 
     while True:
         if current_id < 0:
             break
         
-        target_url = get_target_url(base_url_prefix, current_id, base_url_suffix)
+        target_url = get_target_url(base_url_prefix, current_id, base_url_postfix)
         #history_tracker.last_checked_url = target_url # Оновлюємо останній перевірений
 
         # --- НОВА ЛОГІКА: Перевірка Історії спершу ---
@@ -60,12 +69,17 @@ def run_scanner(initial_url):
             
             # Виводимо повідомлення, що це дані з історії
             # TODO: Вивід має регулюватися dt-transform, тут лише виклик кінцевого формату
-            data_transformer.print_history_in_preview(current_id, status_code, filename, c_length)
+            if status_code in (200, 404):
+                data_transformer.print_history_in_preview(current_id, status_code, filename, c_length)
+            else:
+                is_cached = False
+                io_handler.printf_msg(f"\n{URL_ID_SUFIX}{current_id} : {filename} : Перевірка {target_url}... (Last code={status_code})", color='CYAN')
+                response, status_code = session.check_url_head(target_url)
             
         else:
             # Якщо результату немає в історії, виконуємо запит
             is_cached = False
-            io_handler.printf_message(f"\n{URL_ID_SUFIX}{current_id} : Перевірка {target_url}...", color='YELLOW')
+            io_handler.printf_msg(f"\n{URL_ID_SUFIX}{current_id} : Перевірка {target_url}...", color='YELLOW')
             response, status_code = session.check_url_head(target_url)
 
         history_tracker.last_checked_url = target_url # Оновлюємо останній перевірений
@@ -81,30 +95,32 @@ def run_scanner(initial_url):
             
             history_tracker.add_success(target_url)
 
-            #io_handler.print_message(f"\nID-{current_id} : Файл знайдено : {filename}", color='GREENB')
+            #io_handler.print_msg(f"\nID-{current_id} : Файл знайдено : {filename}", color='GREENB')
             
-            options_str = f"Оберіть дію (E/D: продовжити, G: скачати, C/Q: вийти) [ID: {current_id}]: "
+            options_str = data_transformer.get_options('act_normal') 
             action = io_handler.get_action_from_user(options_str)
 
             if action == 'RETURN':
-            elif action == 'DECREMENT':
+                current_id -= 1
+                # return-function
+            
+            if action == 'DECREMENT':
+                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
                 current_id -= 1
             elif action == 'INCREMENT':
+                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
                 current_id += 1
             elif action == 'DOWNLOAD':
+                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
                 session.download_file(target_url, filename)
                 current_id += 1 
-            elif action == 'EXIT_SOFT':
-                io_handler.print_message("[!] Процес зупинено користувачем.")
+            elif action == 'QUICK_EXIT':
+                io_handler.print_msg("[!] Процес зупинено користувачем.")
                 break
-            elif action == 'EXIT_CLIPBOARD':
-                last_url = history_tracker.get_last_successful()
-                if last_url:
-                    pyperclip.copy(last_url)
-                    io_handler.print_message(f"[.] Повернення останнього успішного URL '{last_url}' до буфера обміну. Вихід.")
+            elif action == 'EXIT':
+                final(history_tracker)
                 break
 
-        #elif status_code == 403:
         elif status_code == 403:
             if not is_cached:
                 # Зберігаємо результат у історії
@@ -112,33 +128,39 @@ def run_scanner(initial_url):
             history_tracker.add_error(target_url, status_code)
             
             #action = io_handler.handle_403_prompt(current_id)
-            io_handler.overwrite_message(f"\r{URL_ID_SUFIX}{current_id}: Доступ заборонено (403)! Опції: ", color='RED')
-            options_str = f"[T/Е] - Обхід, [D/В] - Декремент, [E/К] - Інкремент, [C/Q] - Вийти: "
+            io_handler.overwrite_msg(f"\r{URL_ID_SUFIX}{current_id}: Доступ заборонено (403)! Опції: ", color='RED')
+            options_str = data_transformer.get_options('act_error')
             action = io_handler.get_action_from_user(options_str)
             
             if action == 'TRY_BYPASS':
                 if session.renew_session(target_url):
                     continue # Повторна перевірка ТОГО Ж ID з новим скрепером
             elif action == 'DECREMENT':
-                current_id -= 1
+                if current_id < 1:
+                    current_id -= 1
+                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
+                session.renew_session(get_target_url(base_url_prefix, current_id, base_url_postfix))
             elif action == 'INCREMENT':
                 current_id += 1
-            elif action in ('EXIT_SOFT', 'EXIT_CLIPBOARD'):
-                if action == 'EXIT_CLIPBOARD':
-                    last_url = history_tracker.get_last_successful()
-                    if last_url:
-                        pyperclip.copy(last_url)
-                        io_handler.print_message(f"Повернення останнього успішного URL '{last_url}' до буфера обміну. Вихід.")
-                io_handler.print_message("Процес зупинено користувачем.")
+                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
+                session.renew_session(get_target_url(base_url_prefix, current_id, base_url_postfix))
+            elif action in ('QUICK_EXIT', 'EXIT'):
+                if action == 'EXIT':
+                    final(history_tracker)
+                    break
+                io_handler.print_msg("Процес зупинено.")
                 break
                 
         # Обробка інших помилок
         elif status_code == 404:
-            io_handler.print_message(f"ID-{current_id} : Файл не знайдено (404)", color='YELLOW')
+            io_handler.print_msg(f"ID-{current_id} : Файл не знайдено (404)", color='YELLOW')
             history_tracker.add_error(target_url, status_code)
-            current_id += 1
+            if action == 'INCREMENT':
+                current_id += 1
+            elif action == 'DECREMENT':
+                current_id -= 1
         elif status_code == -1:
         else: 
-            io_handler.print_message(f"ID-{current_id} : Помилка ({status_code}) або з'єднання/таймаут.", color='RED')
+            io_handler.print_msg(f"ID-{current_id} : Помилка ({status_code}) або з'єднання/таймаут.", color='RED')
             history_tracker.add_error(target_url, status_code)
             current_id += 1
