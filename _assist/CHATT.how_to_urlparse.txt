@@ -1,0 +1,226 @@
+﻿> Як розбити посилання на домен та uri в python? А в uri знайти числовий індекс окремо.
+
+Чудове питання\! У Python для роботи з URL-адресами найчастіше використовують модуль **`urllib.parse`**.
+
+Ось як можна розбити посилання на домен (netloc) та URI (path, query, fragment), а потім окремо знайти числовий індекс в URI.
+
+## 1\. Розбиття посилання на домен та URI
+
+Модуль `urllib.parse` має функцію **`urlparse()`**, яка розбиває URL-адресу на 6 компонентів: scheme, netloc, path, params, query, та fragment.
+
+```python
+from urllib.parse import urlparse
+
+url = "https://www.example.com/posts/view/12345?action=edit#comments"
+
+# 1. Розбиваємо URL
+parsed_url = urlparse(url)
+
+# 2. Отримуємо домен (netloc)
+domain = parsed_url.netloc
+
+# 3. Отримуємо URI-частину
+# URI-частина - це шлях (path) та все, що йде після нього (query, fragment)
+# Ми можемо відтворити її, використовуючи path, params, query та fragment.
+# Але часто URI-частиною називають просто шлях (path)
+uri_path = parsed_url.path 
+
+# Якщо вам потрібна повна "URI-частина" після домену, включаючи параметри
+uri_full = parsed_url.path
+if parsed_url.params:
+    uri_full += ';' + parsed_url.params
+if parsed_url.query:
+    uri_full += '?' + parsed_url.query
+if parsed_url.fragment:
+    uri_full += '#' + parsed_url.fragment
+
+print(f"Початкове URL: {url}")
+print(f"Домен (netloc): {domain}")
+print(f"URI (шлях): {uri_path}")
+print(f"URI (повна частина): {uri_full}")
+```
+
+### Результат:
+
+```
+Початкове URL: https://www.example.com/posts/view/12345?action=edit#comments
+Домен (netloc): www.example.com
+URI (шлях): /posts/view/12345
+URI (повна частина): /posts/view/12345?action=edit#comments
+```
+
+-----
+
+## 2\. Пошук числового індексу в URI
+
+Після отримання URI-частини (наприклад, `/posts/view/12345`), ви можете використати регулярні вирази (**`re`**) або просто розбити шлях за допомогою **`split()`**.
+
+### A. Використання `split()` (для простих шляхів)
+
+Якщо числовий індекс завжди останній елемент шляху, розділеного `/`.
+
+```python
+import re
+from urllib.parse import urlparse
+
+url = "https://www.example.com/posts/view/12345"
+parsed_url = urlparse(url)
+uri_path = parsed_url.path  # /posts/view/12345
+
+# Розбиваємо шлях на частини
+path_parts = uri_path.split('/')
+
+# Проходимо частинами шляху у зворотному порядку, щоб знайти перше число
+numeric_index = None
+for part in reversed(path_parts):
+    if part.isdigit():
+        numeric_index = int(part)
+        break
+
+print(f"Шлях URI: {uri_path}")
+print(f"Числовий індекс (split): {numeric_index}")
+```
+
+### B. Використання регулярних виразів (`re`)
+
+Якщо числовий індекс може бути в будь-якому місці, або потрібно знайти *перше* чи *останнє* число в усьому рядку URI.
+
+Використаємо шаблон `\d+` для пошуку одного або більше цифр.
+
+```python
+import re
+from urllib.parse import urlparse
+
+url = "https://www.example.com/user/edit-profile/500/update-info"
+parsed_url = urlparse(url)
+uri_path = parsed_url.path  # /user/edit-profile/500/update-info
+
+# Регулярний вираз для пошуку всіх послідовностей цифр (\d+)
+numbers = re.findall(r'\d+', uri_path)
+
+if numbers:
+    # Перший знайдений числовий індекс
+    first_index = int(numbers[0])
+    
+    # Всі знайдені індекси
+    all_indices = [int(n) for n in numbers]
+    
+    print(f"\nШлях URI: {uri_path}")
+    print(f"Всі числові індекси: {all_indices}")
+    print(f"Перший числовий індекс (re): {first_index}")
+else:
+    print("\nЧисловий індекс не знайдено.")
+```
+
+### Висновок:
+
+  * Використовуйте **`urllib.parse.urlparse(url)`** для надійного розбиття посилання.
+  * Домен знаходиться в атрибуті **`.netloc`**.
+  * Шлях URI знаходиться в **`.path`**.
+  * Для пошуку числового індексу використовуйте **`re.findall(r'\d+', uri_path)`** або **`uri_path.split('/')`**, якщо структура шляху проста і передбачувана.
+
+-----
+
+Я можу допомогти вам проаналізувати конкретний URL-адресу або показати, як обробити список URL-адрес.
+
+
+> Ні, а число? Просто число яке там є. Може з якимись умовами навіть.
+
+Зрозумів\! Вам потрібно витягти **саме число** з URI, можливо, з певними умовами щодо його розташування.
+
+Найкращий спосіб зробити це — використовувати **регулярні вирази (`re`)**, оскільки вони дозволяють встановлювати чіткі умови пошуку.
+
+-----
+
+## 🔍 Витягнення числа з URI за допомогою Regular Expressions
+
+Припустимо, ви вже отримали **шлях URI** (`uri_path`) за допомогою `urlparse().path`.
+
+### 1\. Витягнення ПЕРШОГО числа у всьому шляху
+
+Якщо вам потрібне перше число, яке зустрічається у шляху, незалежно від того, де воно стоїть.
+
+```python
+import re
+from urllib.parse import urlparse
+
+url = "https://example.com/item/view/12345/stats?v=99"
+uri_path = urlparse(url).path  # /item/view/12345/stats
+
+# Шаблон \d+ знаходить одну або більше цифр
+match = re.search(r'\d+', uri_path)
+
+if match:
+    # re.search повертає об'єкт відповідності (match object)
+    first_number = int(match.group(0))
+    print(f"Шлях: {uri_path}")
+    print(f"Знайдене число (перше): {first_number}")
+else:
+    print(f"Шлях: {uri_path}")
+    print("Число не знайдено.")
+```
+
+### 2\. Витягнення числа як ОСТАННЬОГО елемента шляху (ID)
+
+Це поширений випадок, коли число є ідентифікатором (ID) ресурсу і стоїть наприкінці шляху.
+
+Ви можете використовувати `split('/')`, як було показано раніше, АБО регулярний вираз, який явно вимагає, щоб число було наприкінці.
+
+```python
+import re
+from urllib.parse import urlparse
+
+url = "https://example.com/posts/details/7890/"
+uri_path = urlparse(url).path  # /posts/details/7890/
+
+# Шаблон:
+# /(\d+) - знайти число (\d+) і захопити його в групу
+# /?$   - дозволити опціональний слеш наприкінці (/?), а потім кінець рядка ($)
+match = re.search(r'/(\d+)/?$', uri_path)
+
+if match:
+    # match.group(1) повертає значення з першої захоплювальної групи
+    last_id = int(match.group(1))
+    print(f"Шлях: {uri_path}")
+    print(f"Знайдений ID (останній елемент): {last_id}")
+else:
+    print(f"Шлях: {uri_path}")
+    print("ID наприкінці шляху не знайдено.")
+```
+
+### 3\. Витягнення числа, яке йде ПІСЛЯ конкретного слова
+
+Якщо ви знаєте, що число, яке вам потрібне, завжди йде після певного сегмента, наприклад, після `/user/`.
+
+```python
+import re
+from urllib.parse import urlparse
+
+url = "https://example.com/api/v1/user/54321/info"
+uri_path = urlparse(url).path  # /api/v1/user/54321/info
+
+# Шаблон:
+# /user/   - шукаємо сегмент "/user/"
+# (\d+)    - захоплюємо наступне число
+# /        - вимагаємо, щоб після числа йшов слеш
+match = re.search(r'/user/(\d+)/', uri_path)
+
+if match:
+    # match.group(1) повертає значення з першої захоплювальної групи
+    user_id = int(match.group(1))
+    print(f"Шлях: {uri_path}")
+    print(f"Знайдений User ID: {user_id}")
+else:
+    print(f"Шлях: {uri_path}")
+    print("User ID не знайдено.")
+```
+
+**Ключові елементи регулярних виразів:**
+
+| Шаблон | Значення |
+| :--- | :--- |
+| `\d` | Будь-яка цифра (0-9) |
+| `\d+` | Одна або більше цифр |
+| `()` | Захоплювальна група (число, яке ми хочемо витягти) |
+| `$` | Кінець рядка |
+| `/?` | Опціональний (може бути або не бути) слеш |
