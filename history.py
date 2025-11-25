@@ -1,5 +1,9 @@
 ﻿# history.py
 
+import re
+from urllib.parse import urlparse
+import io_handler
+
 # Поки що треба, що воно вело історію хочаб в середині себе. Проте з можоивістю 
 # екстракції. Постіний кравлінг файлових посилань може бути нетиповим і підозрілим 
 # трафіком, тому добре було б зайвий раз не чіпати посилання які пройшли 
@@ -17,11 +21,21 @@ class HistoryEntry:
 
 class ScannerHistory:
     """Клас для зберігання історії сканування."""
-    def __init__(self):
+    def __init__(self, url):
         self.successful_urls = []
         self.error_urls = []
         self.processed_results = {} # Новий словник: {id: HistoryEntry}
         self.last_checked_url = None
+        parsed_url = urlparse(url)
+        uri_path = parsed_url.path
+        domain = parsed_url.netloc
+        numbers = re.findall(r'\d+', uri_path)
+        if numbers:
+            # Перший знайдений числовий індекс
+            first_index = int(numbers[0])
+        else:
+            first_index = -1
+        io_handler.print_msg(f"[+] URL's history for [${domain}] started* from file index ${first_index}.")
 
     def add_success(self, url):
         """Додає успішно оброблений URL."""
