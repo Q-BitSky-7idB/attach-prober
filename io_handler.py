@@ -51,6 +51,7 @@ COLOR_MAP = {
     'GREEN': Fore.GREEN,
     'RED': Fore.RED,
     'YELLOW': Fore.YELLOW,
+    'YELLOWB': Fore.LIGHTYELLOW_EX,
     'CYAN': Fore.CYAN,
     'GREENB': Fore.LIGHTGREEN_EX,
     'CYANB': Fore.LIGHTCYAN_EX,
@@ -70,7 +71,7 @@ def print_msg(message, color='DEFAULT'):
 
 def overwrite_msg(message, color='DEFAULT'):
     """Перезаписує поточний рядок без нового рядка."""
-    sys.stdout.write(f"\r{' ' * LAST_LINE_SIZE +'\r'}{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
+    sys.stdout.write(f"\r{' ' * LAST_LINE_SIZE}\r{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
     sys.stdout.flush()
 
 def Xget_action_from_user(options_str):

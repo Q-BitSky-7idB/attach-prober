@@ -55,7 +55,7 @@ class ScannerHistory:
         if status_code == 200:
             if url not in self.successful_urls: # Уникаємо дублікатів при повторній обробці
                 self.successful_urls.append(url)
-        elif status_code not 200:
+        elif not status_code == 200:
              # Додаємо URL помилки, якщо це не 404
              if not any(item[0] == url for item in self.error_urls):
                 self.error_urls.append((url, status_code)) 
