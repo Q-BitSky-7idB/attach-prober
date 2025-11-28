@@ -14,6 +14,7 @@ SCRAPER_PARAMS = {
 DEFAULT_TIMEOUT = 30
 
 # --- Шаблон URL ---
+FILENAME_PATTER = r'filename\*?=(?:utf-8\'\')?"?([^"]+)"?'
 # Регулярний вираз для пошуку та розбиття URL: (префікс)(ID)(суфікс)
 URL_ID_PATTERN = r'(.*id=)(\d+)(.*)'
 URL_ID_SUFIX = 'id='

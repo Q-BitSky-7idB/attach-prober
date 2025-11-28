@@ -12,7 +12,7 @@ from scanner_loop import run_scanner
 def main():
     """Основна функція для парсингу аргументів та запуску сканера."""
     parser = argparse.ArgumentParser(description="• Інтерактивний сканер файлів із змінним ID.")
-    parser.add_argument('url', type=str, help='// Початкове посилання, що містить змінний ID (наприклад, base?id=123)')
+    parser.add_argument('url', type=str, help='– Початкове посилання, що містить змінний ID (наприклад, base?id=123)')
     args = parser.parse_args()
     
     run_scanner(args.url)
