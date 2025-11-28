@@ -1,4 +1,46 @@
 ﻿
+[explained]:
+
+1. отримання посилання як str
+ 2. перевірка на валідність
+3. отримання (global)url_obj <- domain, prefix, index, postfix
+3.1 утворюються 2(+1) глобальні, та 2 локальні змінні:
+3.1.1 - domain
+3.1.2 - prefix\base
+ 3.1.3 - postfix\remains
+3.2.1 - index
+3.2.2 - current(with whole URL)
+4. вивід деякої інформації початок роботи
+5. (одразу) спроба отримати інформацію про мережевий файл - 1-ий запит // усі реакції контролюються всередині класу network
+5.1. можливі варіанти подій:
+5.1.1 - 200|404: не потребує ніяких обходів
+5.1.2 - 403: потребує
+6. ...
+
+[structure]:
+
+io-strategy:
+ 200: green, get[filename, length]
+ 403: yellow, inform+trying-to-bypass:change-requests-to-cffi
+ 404: red: inform+decision
+ 410: magenta,"unusual", inform+decision
+
+ main
+ ↓
+ current ← DataBlock: url, file_id, *console_id, *console_place
+ ↓ + (string)url
+ 
+ ↓
+ loop()
+  ↓
+ (global)if not current then current = new DataBlock
+  ↓
+  ├─→ network : get_req : 200|403|404|500
+  │   ↑↓                  
+  ├─→ io	// in console: 1 DtBlck = 2 lines : 1 line of info + 1 line to decision(then empty)
+  ↓
+  (global)current = new DataBlock
+
 [structure]:
 
  main 
