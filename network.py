@@ -11,7 +11,8 @@ from curl_cffi import requests # <-- НОВА БІБЛІОТЕКА
 from curl_cffi import CurlError
 
 import config
-import io_handler
+import console as io
+import context
 
 # Конфігурація для імітації браузера
 BROWSER_IMPERSONATE = "chrome120"
@@ -35,12 +36,12 @@ class FileScannerSession:
         self.session = self._create_session()
         
         # 1. Атрибут для ТИПІЗАЦІЇ: Домени, які погано обробляють HEAD
-        self.non_standard_head_domains = {} 
+        #self.non_standard_head_domains = {} 
         # 2. Атрибут для ПРОФІЛЮВАННЯ: Зберігання базової затримки домену (latency)
-        self.domain_base_latency = {} 
+        #self.domain_base_latency = {} 
         
         # Проводимо початкове "прогрівання"
-        self._warmup_session(initial_url_to_check)
+        self._cf_bypass(CURRENT.URL)
 
 
     def _create_session(self):
@@ -49,9 +50,9 @@ class FileScannerSession:
         s = requests.Session()
         return s
 
-    def _warmup_session(self, url):
+    def _cf_bypass(self, url):
         """Виконує початковий GET-запит для обходу CF та отримання куків без скачування контенту."""
-        io_handler.print_msg("[·] Спроба 'прогріву' сесії... Обхід CF!")
+        io.printf("[·] Спроба обходу CloudFlare...")
         
         response = None
         # Використовуємо self.session для збереження куків
@@ -67,11 +68,11 @@ class FileScannerSession:
             # Якщо CF повертає JS-Challenge, curl_cffi обробляє його та встановлює куки.
             # Нам не потрібно читати response.content, куки вже встановлені.
             
-            io_handler.print_msg(f"\033M\r{' ' * 41}\r[+] Сесія успішно 'прогріта'!", color='GREEN')
+            io.printf(f"\r{' ' * 42}\r[+] Обхід CF успішний!", color='GREEN')
             return True
             
         except Exception as e:
-            io_handler.print_msg(f"[!] Не вдалося 'прогріти' сесію при запуску: \n{e}", color='RED')
+            io.prints(f"\r{' ' * 42}\r[!] обійти CF не вдалось! Причина:\n{e}", color='RED')
             return False
         
         finally:
@@ -170,11 +171,16 @@ class FileScannerSession:
     
     # --- МЕТОДИ ПЕРЕВІРКИ URL ---
 
-    def check_url_head(self, url):
+    def check_url_head(self, url=None):
         """Виконує HEAD-запит, використовуючи адаптивний таймаут."""
+        if CURRENT and CURRENT.URL:
+          url = CURRENT.URL
+        if not url:
+          raise Exception("EMPTY_URL")
+        global CURRENT
         
         try:
-            domain = urllib.parse.urlparse(url).netloc
+            #domain = urllib.parse.urlparse(url).netloc
             #current_timeout = self._get_timeout(domain)
             current_timeout = 30
             
@@ -185,6 +191,9 @@ class FileScannerSession:
                 impersonate=BROWSER_IMPERSONATE,
                 allow_redirects=True
             )
+            #if response.status_code == 403:
+            CURRENT.Status = response.status_code
+            CURRENT.Body = response
             return response, response.status_code
         except Exception:
             return None, -1
@@ -198,7 +207,7 @@ class FileScannerSession:
             domain = urllib.parse.urlparse(url).netloc
             current_timeout = self._get_timeout(domain)
             
-            io_handler.print_message(f"Використовуємо таймаут: {current_timeout:.2f} сек. (Range)", color='BLUE') 
+            io_handler.prints(f"Використовуємо таймаут: {current_timeout:.2f} сек. (Range)", color='BLUE') 
 
             custom_headers = {'Range': 'bytes=0-1'}
             response = self.session.get(
@@ -243,50 +252,17 @@ class FileScannerSession:
             return response, status
 
         # Помилка: (-1), яка є тайм-аутом або іншою помилкою. Типізація
-        io_handler.print_message(f"HEAD-запит для {domain} зазнав невдачі. Вважаємо його 'нестандартним'.", color='YELLOW')
+        io_handler.prints(f"HEAD-запит для {domain} зазнав невдачі. Вважаємо його 'нестандартним'.", color='YELLOW')
         
         # 4. Класифікація (Типізація)
         self.non_standard_head_domains[domain] = True
-        io_handler.print_message(f"Домен {domain} додано до 'чорного списку'. Повторна перевірка...", color='RED')
+        io_handler.prints(f"Домен {domain} додано до 'чорного списку'. Повторна перевірка...", color='RED')
         
         # 5. Повторюємо перевірку з Резервним (Range) методом
         return self._check_url_with_range(url)
     
     
     # ... (get_filename_from_headers та download_file залишаються без змін) ...
-    
-
-    def get_meta_from_headers(self, response):
-        """
-        Витягує назву файлу та Content-Length із заголовків відповіді.
-        Повертає кортеж: (filename, content_length)
-        """
-        
-        # 1. Отримання Content-Length (Розмір файлу)
-        content_length_str = response.headers.get('Content-Length')
-        try:
-            # Конвертуємо у ціле число. Якщо заголовок відсутній, повернемо None.
-            content_length = int(content_length_str)
-        except (TypeError, ValueError):
-            content_length = None # Розмір не визначено або не є числом
-
-        # 2. Отримання Назви Файлу (Існуюча логіка)
-        filename = None
-        cd = response.headers.get('Content-Disposition')
-        
-        if cd:
-            # Шукаємо назву у Content-Disposition
-            match = re.search(r'filename\*?=(?:utf-8\'\')?"?([^"]+)"?', cd, re.I)
-            if match:
-                filename = match.group(1).strip('"\' ')
-        
-        # Якщо назва не знайдена в Content-Disposition, беремо її з URL
-        if not filename:
-            filename = os.path.basename(response.url.split('?')[0])
-
-        # 3. Повернення обох значень
-        return filename, content_length
-        
         
     
     def download_fileX(self, url, filename):
