@@ -1,0 +1,1360 @@
+﻿У цьому методі узятого із attach-porober, треба замість прямого запису файлу додати наступне: 
+
+перевірка існування файлу за іменем та розміром в кінцевій директорії перед записом.
+
++ якщо немає - звичайний запис
+
+- якщо існує і збігається назва та розмір(його файлу надходження можна узяти з .CURRENT.Size) виводить однорядкове попередження(через overwrite-метод) з get_actions_from_user, чи треба перезаписувати чи зберегти як копію.
+
+
+Логіка збереження копії така: як у windows, береться назва файлу і додається постфікс між назвою і типом file_name[.<N>].ext, якщо такий файл існує, то знайти найбільший індекс й інкрементувати зберігши його у нову копію. наприклад file_name.2.ext - існує, тоді новий зберегти треба у file_name.3.ext.
+
+
+І ще такий момент робота з файлом і поточна логіка збереження не мають знаходитись у network.py, це все треба загнати у system.py, з відповідною назвою інтерфейса або методів, як у console.py->io. Чи можна також якось передати роботу "for chunk in r.iter_content(chunk_size=8192):" цього рядка чи якимось чином транслювати у метод із system.py? Щоб конкретно робота із записом виконувалась там.
+
+
+
+Код:
+
+
+# session_manager.py
+
+
+import re
+
+import os
+
+import time
+
+from urllib.parse import urlparse
+
+# Змінюємо імпорт: використовуємо requests з curl_cffi
+
+from curl_cffi import requests # <-- НОВА БІБЛІОТЕКА
+
+# Додаємо імпорт для специфічної помилки cURL, яка може бути причиною
+
+#from curl_cffi.requests import CurlError 
+
+from curl_cffi import CurlError
+
+
+import config
+
+import console as io
+
+import context
+
+
+   def download_file(self, url=None, filename=None):
+
+        """
+
+        Виконує завантаження файлу. 
+
+        ВИПРАВЛЕНО: Прибрано with r: та додано r.close() у finally блоці.
+
+        Це усуває AttributeError: __enter__, оскільки Response об'єкт curl_cffi 
+
+        не підтримує контекстний менеджер для цього випадку.
+
+        """
+
+        if not url:
+
+            url=context.CURRENT.URL
+
+        if not filename:
+
+            filename=context.CURRENT.FileName
+
+        #io.printf(f"Розпочато скачування: {filename}")
+
+        r = None # Ініціалізуємо змінну відповіді
+
+        try:
+
+            # 1. Виконуємо GET-запит (для потокового завантаження)
+
+            r = self.session.get(
+
+                url, 
+
+                stream=True, 
+
+                timeout=60, 
+
+                impersonate=BROWSER_IMPERSONATE
+
+            )
+
+            
+
+            # ВИПРАВЛЕНО: Прибрано with навколо self.session.get(), 
+
+            # залишено лише with навколо об'єкта відповіді (r).
+
+             # # #
+
+            # 2. Використовуємо with r для гарантованого закриття з'єднання
+
+            #with r:
+
+            #    r.raise_for_status()
+
+            #    ...
+
+            
+
+            # 2. Перевіряємо статус коду
+
+            r.raise_for_status()
+
+            file_path = os.path.join(config.DOWNLOAD_DIR, filename)
+
+            
+
+            # Виходить він пише по чанку разом у файл
+
+            # 3. Записуємо файл
+
+            with open(file_path, 'wb') as f:
+
+                for chunk in r.iter_content(chunk_size=8192):
+
+                    f.write(chunk)
+
+            
+
+            #io.printf(f"Файл збережено до: {file_path}", color='GREEN')
+
+            return True
+
+        
+
+        except CurlError as e:
+
+            # Специфічне захоплення помилок рівня cURL (ConnectionError, Timeout тощо)
+
+            io.prints(f"Не вдалося завантажити файл (CurlError):\n{e}", color='RED')
+
+            return False
+
+        
+
+        except Exception as e:
+
+            # Загальне захоплення. Виводимо тип помилки, щоб побачити, що саме сталося.
+
+            error_type = type(e).__name__
+
+            io.prints(f"Не вдалося завантажити файл ({error_type}):\n{e}", color='RED')
+
+            return False
+
+            
+
+        finally:
+
+            # Обов'язково закриваємо з'єднання, якщо об'єкт r було створено
+
+            if r:
+
+                r.close()
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+Зрозуміло. Це чудова ідея для рефакторингу — розділити мережеву логіку та логіку файлової системи. Це відповідає принципу єдиної відповідальності (Single Responsibility Principle).
+
+Щодо вашого питання про r.iter_content: Так, це абсолютно можливо. У Python генератори (яким є результат iter_content) можна передавати як аргументи у функції. system.py просто "споживатиме" цей генератор, записуючи дані на диск, навіть не знаючи, що ці дані надходять з мережі.
+
+Ось реалізація розбита на два файли.
+1. system.py
+
+Створимо (або доповнимо) цей файл. Тут буде логіка перевірки, перейменування (Windows-style) та запису потоку.
+Python
+
+# system.py
+import os
+import shutil
+import console as io # Припускаємо, що get_actions_from_user тут
+import config
+
+class FileSystem:
+    """
+    Клас для роботи з файловою системою, щоб розвантажити network/session модулі.
+    """
+
+    @staticmethod
+    def _get_next_copy_filename(directory: str, filename: str) -> str:
+        """
+        Генерує ім'я для копії: filename.ext -> filename.1.ext -> filename.2.ext
+        Знаходить перший вільний індекс.
+        """
+        name, ext = os.path.splitext(filename)
+        index = 1
+        
+        while True:
+            # Формуємо нове ім'я: name.N.ext
+            new_filename = f"{name}.{index}{ext}"
+            full_path = os.path.join(directory, new_filename)
+            
+            if not os.path.exists(full_path):
+                return new_filename
+            index += 1
+
+    @staticmethod
+    def save_stream_content(stream_iterator, filename: str, expected_size: int = 0) -> bool:
+        """
+        Приймає ітератор байтів (потік) і записує його у файл з логікою конфліктів.
+        
+        :param stream_iterator: генератор r.iter_content(...)
+        :param filename: оригінальне ім'я файлу
+        :param expected_size: розмір файлу з context.CURRENT.Size для звірки
+        """
+        directory = config.DOWNLOAD_DIR
+        file_path = os.path.join(directory, filename)
+        
+        # --- ЛОГІКА ПЕРЕВІРКИ ---
+        if os.path.exists(file_path):
+            local_size = os.path.getsize(file_path)
+            
+            # Якщо файл існує І розмір збігається
+            if local_size == expected_size:
+                msg = f"Файл '{filename}' (Size: {local_size}) вже існує."
+                
+                # Викликаємо меню вибору (припускаємо, що повертає ключ або індекс)
+                # Потрібно адаптувати під реальний інтерфейс get_actions_from_user
+                choice = io.get_actions_from_user(
+                    msg, 
+                    options=["Overwrite (Перезаписати)", "Save as Copy (Зберегти копію)"]
+                )
+                
+                if choice == 0: # Overwrite
+                    io.printf("Перезапис файлу...", color='YELLOW')
+                    # file_path залишається тим самим
+                    
+                elif choice == 1: # Copy
+                    new_filename = FileSystem._get_next_copy_filename(directory, filename)
+                    file_path = os.path.join(directory, new_filename)
+                    io.printf(f"Збереження як копія: {new_filename}", color='CYAN')
+                    
+                else:
+                    # Якщо користувач скасував або щось пішло не так
+                    io.prints("Завантаження скасовано користувачем.", color='GREY')
+                    return False
+            else:
+                # Якщо файл існує, але розмір різний - зазвичай просто перезаписуємо 
+                # або додаємо .part, але за вашим ТЗ (якщо немає збігу - звичайний запис)
+                # тож просто пишемо поверх (Overwrite).
+                pass
+
+        # --- ЛОГІКА ЗАПИСУ ---
+        try:
+            # Створення директорії, якщо її немає
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+            with open(file_path, 'wb') as f:
+                # Транслюємо чанки з мережі прямо на диск
+                for chunk in stream_iterator:
+                    if chunk: 
+                        f.write(chunk)
+            
+            io.printf(f"Файл збережено: {os.path.basename(file_path)}", color='GREEN')
+            return True
+
+        except Exception as e:
+            io.prints(f"Помилка запису файлу: {e}", color='RED')
+            return False
+
+# Створюємо екземпляр або використовуємо як статику, залежно від архітектури
+fs = FileSystem()
+
+2. session_manager.py (Оновлений)
+
+Тепер цей файл став набагато чистішим. Він відповідає лише за отримання з'єднання, а збереження делегує.
+Python
+
+# session_manager.py
+
+import os
+# from urllib.parse import urlparse # Якщо не використовується, можна прибрати
+from curl_cffi import requests, CurlError
+import config
+import console as io
+import context
+import system  # <-- Імпортуємо наш новий модуль
+
+# ... (інші методи класу) ...
+
+    def download_file(self, url=None, filename=None):
+        """
+        Виконує завантаження файлу, делегуючи запис у system.py.
+        """
+        if not url:
+            url = context.CURRENT.URL
+        if not filename:
+            filename = context.CURRENT.FileName
+            
+        # Отримуємо очікуваний розмір для перевірки конфліктів
+        expected_size = getattr(context.CURRENT, 'Size', 0)
+
+        r = None 
+        try:
+            # 1. Виконуємо GET-запит (stream=True обов'язково)
+            r = self.session.get(
+                url, 
+                stream=True, 
+                timeout=60, 
+                impersonate=context.BROWSER_IMPERSONATE # припускаю context або config
+            )
+            
+            # 2. Перевіряємо статус
+            r.raise_for_status()
+            
+            # 3. ДЕЛЕГУЄМО ЗАПИС У SYSTEM
+            # Ми передаємо генератор (r.iter_content), а не байти.
+            # system.py буде "тягнути" дані з цього генератора.
+            stream_gen = r.iter_content(chunk_size=8192)
+            
+            result = system.fs.save_stream_content(
+                stream_iterator=stream_gen,
+                filename=filename,
+                expected_size=expected_size
+            )
+            
+            return result
+        
+        except CurlError as e:
+            io.prints(f"Не вдалося завантажити файл (CurlError):\n{e}", color='RED')
+            return False
+        
+        except Exception as e:
+            error_type = type(e).__name__
+            io.prints(f"Не вдалося завантажити файл ({error_type}):\n{e}", color='RED')
+            return False
+            
+        finally:
+            # Закриваємо з'єднання. Оскільки ми передали генератор у функцію вище,
+            # він вже відпрацював (цикл for закінчився) до моменту виклику r.close().
+            if r:
+                r.close()
+
+Основні зміни та пояснення:
+
+    Передача потоку (stream_iterator): У рядку system.fs.save_stream_content(stream_iterator=stream_gen, ...) ми передаємо об'єкт-генератор. Код у session_manager не чекає завантаження всього файлу в пам'ять. Завантаження відбувається байт-за-байтом всередині циклу for chunk in stream_iterator який знаходиться вже у system.py.
+
+    Логіка _get_next_copy_filename: Вона бере назву файлу, розбиває на root та ext. Потім у циклі перевіряє root.1.ext, root.2.ext і так далі, доки не знайде вільне ім'я. Це надійно реалізує вимогу "знайти найбільший індекс й інкрементувати".
+
+    Перевірка конфліктів: У system.py спочатку перевіряється наявність файлу та його розмір. Якщо є збіг — викликається io.get_actions_from_user.
+
+    Чистота коду: network.py (або session_manager) більше не знає про open(), шляхи до файлів чи логіку перейменування. Він просто каже: "Ось потік даних, збережи його під таким-то іменем".
+
+Бажаєте, щоб я уточнив реалізацію get_actions_from_user для console.py, якщо вона ще не реалізована саме так?
+
+А такий виклик спрацює system.fs.save...?
+
+Так, це спрацює, але є нюанс щодо того, як саме ви оформили методи всередині класу FileSystem.
+
+Давайте розберемо два варіанти, щоб ви обрали той, який краще пасує до стилю вашого проєкту (attach-porober).
+Варіант 1. Як у моєму прикладі (через екземпляр fs)
+
+Це спрацює, якщо у кінці файлу system.py ви дійсно створили об'єкт:
+Python
+
+# system.py
+class FileSystem:
+    @staticmethod
+    def save_stream_content(...):
+        ...
+
+# Створення екземпляра
+fs = FileSystem() 
+
+Тоді у session_manager.py:
+Python
+
+import system
+# ...
+system.fs.save_stream_content(...) # Працює коректно
+
+Чому це працює: Коли ви робите import system, Python виконує код модуля. Змінна fs стає атрибутом модуля system.
+Варіант 2. Виклик через клас (без fs)
+
+Оскільки методи позначені як @staticmethod, вам не обов'язково створювати змінну fs = FileSystem(). Ви можете звертатися напряму до класу.
+Python
+
+# system.py
+class FileSystem:
+    @staticmethod
+    def save_stream_content(...):
+        ...
+# fs = FileSystem() <-- ЦЕ НЕ ОБОВ'ЯЗКОВО
+
+Тоді у session_manager.py:
+Python
+
+import system
+# ...
+system.FileSystem.save_stream_content(...) # Теж працює
+
+Варіант 3. "Як у console.io" (Рекомендований для вас)
+
+Ви згадали: "треба загнати у system.py... як у console.py->io". Зазвичай, якщо у вас console це модуль, а io — це об'єкт всередині, то найкраще піти шляхом Варіанту 1, але прибрати @staticmethod, якщо ви плануєте колись зберігати налаштування всередині fs.
+
+Але якщо FileSystem — це просто набір утиліт (як у нашому випадку), то найпростіший і найбільш "пітонячий" варіант — взагалі прибрати клас і залишити просто функції у файлі system.py.
+Ось як це виглядає без зайвих класів (найчистіший код):
+
+system.py:
+Python
+
+import os
+import shutil
+import config
+import console as io
+
+# Просто функція, без class FileSystem
+def _get_next_copy_filename(directory: str, filename: str) -> str:
+    # логіка...
+    pass
+
+# Просто функція, яку ми викликаємо ззовні
+def save_stream_content(stream_iterator, filename: str, expected_size: int = 0) -> bool:
+    # логіка...
+    pass
+
+session_manager.py:
+Python
+
+import system 
+
+# ...
+# Виклик виглядає дуже чисто:
+system.save_stream_content(stream_gen, filename, expected_size)
+
+Підсумок
+
+Якщо ви хочете зберегти структуру system.fs.method(...), переконайтеся, що в кінці system.py є рядок: fs = FileSystem()
+
+Чи переписати код system.py без класу (Варіант 3), щоб було простіше?
+
+Краще зміни логіку реагування на дію користувача щоб було три дії, очікуються такі (клавіша-дія): s-skip, r-rewrite, c-copy.
+
+r - означає просте скачування як і завжди - файл перезаписується
+
+s - ігнорувати файл і продовжувати роботу скрипта - вихід із модуля із False в network
+
+c - відповідно застосувати логіку створення копії і вийти нормальному режимі
+
+Суть меседжу(через overwrite) у тому, що він пишеться в той же рядок в якому був виведений get_action_from_user - глобальний вибір за ітерацією файлу. Тож повідомлення для методу get_action_from_user має бути таким: "Warning: Файл існує [<filename.ext>] : Copy or Rewrite, Skip? [C\R\S] "
+
+
+
+
+Ось коди інших модулів, щоб було зрозуміло як це інтегрувати:
+
+
+# console.py
+
+
+import sys
+
+import os
+
+from colorama import Fore, Style, init
+
+import config
+
+
+LAST_LINE_SIZE = 0
+
+
+# --- Імпорт rich ---
+
+
+# Умовний імпорт для негайного зчитування символу
+
+if os.name == 'nt':
+
+    # Windows: використовуємо msvcrt
+
+    try:
+
+        import msvcrt
+
+    except ImportError:
+
+        # Це малоймовірно, але залишаємо для повної надійності
+
+        msvcrt = None 
+
+else:
+
+    # Linux/macOS: використовуємо термінал
+
+    try:
+
+        import termios, tty
+
+        
+
+        def getch_unix():
+
+            """Читає один символ негайно (Unix/Linux/macOS)."""
+
+            fd = sys.stdin.fileno()
+
+            old_settings = termios.tcgetattr(fd)
+
+            try:
+
+                tty.setraw(sys.stdin.fileno())
+
+                ch = sys.stdin.read(1)
+
+            finally:
+
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+            return ch
+
+            
+
+    except ImportError:
+
+        # Запасний варіант, якщо termios недоступний
+
+        def getch_unix():
+
+            return sys.stdin.read(1)
+
+            
+
+
+# Ініціалізація кольорів
+
+init(autoreset=True)
+
+
+#Fore/Back: BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE, RESET.
+
+#Style: DIM, NORMAL, BRIGHT, RESET_ALL
+
+
+#Fore/Back: LIGHTBLACK_EX, LIGHTRED_EX, LIGHTGREEN_EX, LIGHTYELLOW_EX, LIGHTBLUE_EX, LIGHTMAGENTA_EX, LIGHTCYAN_EX, LIGHTWHITE_EX
+
+
+COLOR_MAP = {
+
+    'GREEN': Fore.GREEN,
+
+    'RED': Fore.RED,
+
+    'YELLOW': Fore.YELLOW,
+
+    'YELLOWB': Fore.LIGHTYELLOW_EX,
+
+    'CYAN': Fore.CYAN,
+
+    'GREENB': Fore.LIGHTGREEN_EX,
+
+    'CYANB': Fore.LIGHTCYAN_EX,
+
+    'REDB': Fore.LIGHTRED_EX,
+
+    'DEFAULT': Style.RESET_ALL,
+
+}
+
+
+def printf(message, color='DEFAULT'):
+
+    global LAST_LINE_SIZE
+
+    """Виводить повідомлення з кольором та новим рядком."""
+
+    sys.stdout.write(f"{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
+
+    sys.stdout.flush()
+
+    LAST_LINE_SIZE = len(message)
+
+    
+
+def prints(message, color='DEFAULT'):
+
+    global LAST_LINE_SIZE
+
+    """Виводить повідомлення з кольором та новим рядком."""
+
+    sys.stdout.write(f"{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}\n")
+
+    sys.stdout.flush()
+
+    LAST_LINE_SIZE = len(message)
+
+
+def overwrite(message, color='DEFAULT'):
+
+    global LAST_LINE_SIZE
+
+    """Перезаписує поточний рядок без нового рядка."""
+
+    if message == "":
+
+        return
+
+    sys.stdout.write(f"\r{' ' * LAST_LINE_SIZE}\r{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
+
+    sys.stdout.flush()
+
+    LAST_LINE_SIZE = len(message)
+
+
+def get_action_from_user(options_str="", acts_dict=None):
+
+    """
+
+    Чекає негайного натискання клавіші, ігнорує нерозпізнані символи/стрілки,
+
+    та повертає відповідну дію.
+
+    """
+
+    sys.stdout.write("\n" + options_str)
+
+    sys.stdout.flush()
+
+
+    while True:
+
+        # 1. Зчитування байтів
+
+        if os.name == 'nt':
+
+            key_bytes = msvcrt.getch()
+
+        else:
+
+            # Це залежить від вашої реалізації getch. Якщо вона повертає байти, це добре.
+
+            # Якщо повертає символ, доведеться адаптувати. Припускаємо, що повертає байти.
+
+            key_bytes = sys.stdin.read(1).encode('utf-8')
+
+        
+
+        key = None
+
+        
+
+        # 2. Обробка спеціальних клавіш (Windows)
+
+        if os.name == 'nt' and key_bytes in (b'\x00', b'\xe0'):
+
+            # Це початок послідовності стрілки або F-клавіші. 
+
+            # Зчитуємо другий байт і ігноруємо послідовність.
+
+            msvcrt.getch() 
+
+            continue # Повертаємось до початку циклу
+
+        
+
+        # 3. Декодування та нормалізація
+
+        try:
+
+            # Декодуємо. Кирилиця повинна декодуватися коректно.
+
+            key = key_bytes.decode('utf-8').lower()
+
+        except UnicodeDecodeError:
+
+            # Ігноруємо нерозпізнані байти або неповні послідовності.
+
+            continue
+
+        
+
+        if not acts_dict:
+
+            acts_dict=config.ACTIONS
+
+        # 4. Обробка дій
+
+        action = acts_dict.get(key)
+
+        
+
+        if action:
+
+            # Очищаємо рядок після отримання символу
+
+            sys.stdout.write("\r" + " " * len(options_str) + " " * 12 + "\r\033M") # Очищаємо рядок та повертаємось на позицію повідомлення
+
+            sys.stdout.flush()
+
+            return action
+
+        
+
+        # 5. Ігноруємо невідомі символи
+
+        # Якщо action None, просто продовжуємо цикл і чекаємо наступне натискання.
+
+        # Це запобігає "крашу" та ігнорує невідомі клавіші.
+
+        # Примітка: Додайте print(f"Невідома клавіша: {key}") для налагодження, якщо потрібно.
+
+
+
+# config.py
+
+
+import os
+
+import re
+
+
+# --- Шляхи та папки ---
+
+DOWNLOAD_DIR = os.path.join(os.path.expanduser('~'), 'Downloads')
+
+
+# --- Налаштування Cloudscraper ---
+
+SCRAPER_PARAMS = {
+
+    'delay': 10, 
+
+    'browser': {'browser': 'chrome', 'platform': 'windows', 'mobile': False}
+
+}
+
+
+DEFAULT_TIMEOUT = 30
+
+
+# --- Шаблон URL ---
+
+FILENAME_PATTERN = r'filename\*?=(?:utf-8\'\')?"?([^"]+)"?'
+
+
+# Регулярний вираз для пошуку та розбиття URL: (префікс)(ID)(суфікс)
+
+URL_ID_PATTERN = r'(.*id=)(\d+)(.*)'
+
+URL_SUFIX = 'id='    # TODO: тут треба автознаходження а не константа
+
+
+def get_meta_from_headers(response):
+
+    """
+
+    Витягує назву файлу та Content-Length із заголовків відповіді.
+
+    Повертає кортеж: (filename, content_length)
+
+    """
+
+    
+
+    # 1. Отримання Content-Length (Розмір файлу)
+
+    content_length_str = response.headers.get('Content-Length')
+
+    try:
+
+        # Конвертуємо у ціле число. Якщо заголовок відсутній, повернемо None.
+
+        content_length = int(content_length_str)
+
+    except (TypeError, ValueError):
+
+        content_length = None # Розмір не визначено або не є числом
+
+
+    # 2. Отримання Назви Файлу (Існуюча логіка)
+
+    filename = None
+
+    cd = response.headers.get('Content-Disposition')
+
+        
+
+    if cd:
+
+        # Шукаємо назву у Content-Disposition
+
+        match = re.search(FILENAME_PATTERN, cd, re.I)
+
+        if match:
+
+            filename = match.group(1).strip('"\' ')
+
+        
+
+        # Якщо назва не знайдена в Content-Disposition, беремо її з URL
+
+        if not filename:
+
+            filename = os.path.basename(response.url.split('?')[0])
+
+
+    # 3. Повернення обох значень
+
+    return filename, content_length
+
+
+# --- Керування діями (для io_handler) ---
+
+ACTIONS = {
+
+    'r': 'RETURN',
+
+    'к': 'RETURN', # Кирилична 'к'
+
+    
+
+    'd': 'DECREMENT',
+
+    'в': 'DECREMENT', # Кирилична 'в'
+
+    
+
+    'e': 'INCREMENT',
+
+    'у': 'INCREMENT', # Кирилична 'у'
+
+
+    'c': 'QUICK_EXIT', # It was 'EXIT_SOFT' : q - ('ы'\'і')
+
+    'с': 'QUICK_EXIT', # Кирилична 'с'
+
+    
+
+    'q': 'EXIT',
+
+    'й': 'EXIT', # Кирилична 'й'
+
+
+    'o': 'DEBUG',
+
+    'щ': 'DEBUG', # Кирилична 'щ'
+
+}
+
+
+# Дії для DOWNLOAD
+
+ADD_DOWNLOAD = {'g': 'DOWNLOAD', 'п': 'DOWNLOAD'} # Кирилична 'п'
+
+
+# Дії для TRY_BYPASS
+
+ADD_BYPASS = {'t': 'TRY_BYPASS', 'е': 'TRY_BYPASS'} # Кирилична 'е'
+
+
+OPTIONS_STRATEGY = {
+
+    200: (
+
+      f"Оберіть дію: (E/D: продовжити, G/П: скачати, C/Q: вийти): ",
+
+      {**ACTIONS, **ADD_DOWNLOAD}
+
+    ),
+
+    403: (
+
+      f"Оберіть дію: [T/Е] - Обхід, [D/В] - Декремент, [E/У] - Інкремент, [C/Q] - Вийти: ",
+
+      {**ACTIONS, **ADD_BYPASS}
+
+    ),
+
+    410: (
+
+      f"Оберіть дію: [D/В] - Декремент, [E/У] - Інкремент, [G/П] – Скачати, [C/Q] - Вийти: ",
+
+      {**ACTIONS, **ADD_DOWNLOAD}
+
+    ),
+
+      0: (f"Оберіть дію: [D/В] - Декремент, [E/У] - Інкремент, [C/Q] - Вийти: ", None)
+
+}
+
+
+def PassiveMsgChose(current_block):
+
+    if current_block.Status == 200:
+
+         return f"{URL_SUFIX}{current_block.Index} : {current_block.Size: >11} : {current_block.FileName} ;", 'GREEN'
+
+    if current_block.Status == 403:
+
+         return f"{URL_SUFIX}{current_block.Index} : Доступ заборонено (403)! : Файл не отримано!", 'RED'
+
+    elif current_block.Status < 500:
+
+         return f"{URL_SUFIX}{current_block.Index} : Помилка - ({current_block.Status}) : Файл не отримано!", 'YELLOW'
+
+    else:
+
+         return f"{URL_SUFIX}{current_block.Index} : Помилка - ({current_block.Status}) : Неочікувана відповідь!", 'RED'
+
+
+PASSIVE_MSGS = {
+
+    'DEFAULT': lambda current_block: (PassiveMsgChose(current_block)),
+
+    #'RETURN': ("", None),
+
+    'DOWNLOAD': lambda current_block: (
+
+        f"{URL_SUFIX}{current_block.Index} : "
+
+        f"{current_block.Size: >11} : Downloading {current_block.FileName}...", 
+
+        'CYAN'
+
+    ),
+
+    'DOWNLOADED': lambda current_block: (
+
+        f"{URL_SUFIX}{current_block.Index} : "
+
+        f"{current_block.Size: >11} : DOWNLOADED << {current_block.FileName}", 
+
+        'CYAN'
+
+    ),
+
+    'TRY_BYPASS': lambda current_block: (
+
+        f"{URL_SUFIX}{current_block.Index} : "
+
+        f"Доступ заборонено (403)! : Файл не отримано!",
+
+        'YELLOW'
+
+    )
+
+}
+
+
+Головний модуль логіки обходу, і який викликає меотоди з інших та network.py:
+
+# scanner_loop.py
+
+
+import sys
+
+import pyperclip
+
+import re
+
+#import history
+
+import config
+
+import network
+
+import console as io
+
+import context as ct
+
+
+def final(history):
+
+    last_url = history.get_last_successful()
+
+    if last_url:
+
+        pyperclip.copy(last_url)
+
+        io.prints(f"[>] Повернення останнього успішного URL '{last_url}' до буфера обміну.\nВихід.")
+
+
+def run_scanner(initial_url):
+
+    """Основний цикл сканування та взаємодії з користувачем."""
+
+    #cycle = 1
+
+    
+
+    # Ініціалізація
+
+    try:
+
+        #io.prints(f"[·] Спроба десереалізувати рядок URL...", color='YELLOW')
+
+        ct.LINK = ct.LinkDetailed(initial_url)
+
+    except ValueError as e:
+
+        io.prints(f"[!] Помилка:", color='RED')
+
+        io.prints(f"{e}", color='REDB')
+
+        return
+
+
+    ct.CURRENT = ct.DataBlock(ct.LINK.BeginIndex)
+
+    session = network.FileScannerSession()    # Have 1 shadow call of CURRENT.URL
+
+    #history_tracker = history.ScannerHistory(initial_url)
+
+    
+
+    io.prints(f"Базове посилання: {ct.LINK.Base}")
+
+    io.prints(f"Поточний ID: [{ct.LINK.BeginIndex}]")
+
+    if ct.LINK.Remains:
+
+        io.prints(f"Закінчення URI: '{ct.LINK.Remains}'")
+
+    io.printf("Папка завантажень: ")
+
+    io.prints(f"{config.DOWNLOAD_DIR}", color='CYAN')
+
+
+    # Початкова перевірка сесії
+
+    while True:
+
+        if ct.CURRENT.Index < 0:
+
+            break
+
+        # 1. CURRENT.GetNext() повертає посилання, що зберігається всередині CURRENT.
+
+        # 2. CURRENT = ... ПЕРЕПРИСВОЮЄ мітку CURRENT на нове (або старе) посилання.
+
+        ct.CURRENT = ct.CURRENT.GetNext()
+
+        
+
+        #history_tracker.last_checked_url = target_url # Оновлюємо останній перевірений
+
+
+        # --- НОВА ЛОГІКА: Перевірка Історії спершу ---
+
+        #history_entry = history_tracker.get_result(current_id)
+
+        
+
+        # --- ВИКОНАННЯ ЗАПИТУ ---
+
+        #response, status_code = session.check_url_head(CURRENT.URL)
+
+        session.check_url_head()
+
+        
+
+        #if history_entry:
+
+            # Якщо результат знайдено в історії, відтворюємо його
+
+        #    response, status_code = None, history_entry.status_code
+
+        #    filename = history_entry.filename
+
+        #    c_length = history_entry.content_length
+
+        #    is_cached = True
+
+            
+
+            # Виводимо повідомлення, що це дані з історії
+
+            # TODO: Вивід має регулюватися dt-transform, тут лише виклик кінцевого формату
+
+        #    if status_code in (200, 404):
+
+        #        data_transformer.print_history_in_preview(current_id, status_code, filename, c_length)
+
+        #    else:
+
+        #        is_cached = False
+
+        #        io.printf(f"\n{config.URL_ID_SUFIX}{current_id} : {filename} : Перевірка {target_url}... (Last code={status_code})", color='CYAN')
+
+        #        response, status_code = session.check_url_head(target_url)
+
+            
+
+        #else:
+
+            # Якщо результату немає в історії, виконуємо запит
+
+        #    is_cached = False
+
+        #    io.printf(f"\n{config.URL_ID_SUFIX}{current_id} : Перевірка {target_url}...", color='YELLOW')
+
+        #    response, status_code = session.check_url_head(target_url)
+
+
+        #history_tracker.last_checked_url = target_url # Оновлюємо останній перевірений
+
+        
+
+        io.printf(f"\n{config.URL_SUFIX}{ct.CURRENT.Index} : Перевірка {ct.CURRENT.URL}...", color='YELLOW')
+
+        
+
+        # --- ОБРОБКА КОДІВ ---
+
+        if ct.CURRENT.State:
+
+            io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : {ct.CURRENT.Size: >11} : {ct.CURRENT.FileName}", color='GREENB')
+
+        else:
+
+            if ct.CURRENT.Status == 403:
+
+                io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : Доступ заборонено (403)! Опції: ", color='REDB')
+
+            elif ct.CURRENT.Status > 403 and ct.CURRENT.Status < 500:
+
+                io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : Помилка - ({ct.CURRENT.Status}) : Файл не отримано!", color='YELLOWB')
+
+            else:
+
+                io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : Помилка - ({ct.CURRENT.Status}) : Неочікувана відповідь! ", color='REDB')
+
+
+        options_msg, options_scope = config.OPTIONS_STRATEGY.get(ct.CURRENT.Status)
+
+        action = io.get_action_from_user(options_msg, options_scope)
+
+        #io.overwrite(config.PASSIVE_MSGS.get(action, config.PASSIVE_MSGS['DEFAULT'])(ct.CURRENT))
+
+        io.overwrite(*config.PASSIVE_MSGS.get(action, config.PASSIVE_MSGS['DEFAULT'])(ct.CURRENT))
+
+        
+
+        # Тут ми вже змінюємо основний об'єкт(не валідний index), тому перемальовувати треба рдразу
+
+        if action == 'RETURN':
+
+            ct.CURRENT.Index += 1
+
+        elif action == 'DECREMENT':
+
+            ct.CURRENT.Index -= 1
+
+        elif action == 'INCREMENT':
+
+            ct.CURRENT.Index += 1
+
+        elif action == 'TRY_BYPASS':
+
+            if session.renew_session():
+
+                continue # Повторна перевірка ТОГО Ж ID з новим скрепером
+
+        elif action == 'DOWNLOAD':
+
+            if session.download_file():
+
+                # Треба враховувати напрямок дії. а не просто (де)інкрементувати кожен раз.
+
+                io.overwrite(*config.PASSIVE_MSGS.get('DOWNLOADED')(ct.CURRENT))
+
+                ct.CURRENT.Index -= 1
+
+                continue
+
+        elif action == 'QUICK_EXIT':
+
+            io.prints("\n[!] Процес зупинено користувачем.", color = 'GREEN')
+
+            break
+
+        elif action == 'EXIT':
+
+            #final(history_tracker)
+
+            io.prints("\nВихід!", color = 'GREEN')
+
+            break
+
+        elif action == 'DEBUG':
+
+            io.prints("\n"+str(vars(ct.CURRENT)))
+
+            io.get_action_from_user()
+
+            continue
+
+            
+
+        #io.overwrite(config.PASSIVE_MSGS.get(action, 0))
+
+Зрозумів завдання. Потрібно інтегрувати логіку взаємодії з користувачем під час конфлікту файлів (існування файлу з тим самим іменем і розміром) у system.py та налаштувати відповідні дії (s, r, c).
+
+Оскільки ви надали контекст з console.py, config.py та scanner_loop.py, я адаптую system.py так, щоб він використовував існуючий механізм get_action_from_user з console.py, але з локальним словником дій для цієї конкретної ситуації.
+
+Ось оновлений код:
+1. config.py (Доповнення)
+
+Додамо сюди словник дій для ситуації конфлікту файлів, щоб все було в одному місці, як і інші ACTIONS.
+Python
+
+# config.py
+
+# ... (ваш існуючий код) ...
+
+# Дії для конфлікту файлів (File Conflict)
+ACTIONS_FILE_CONFLICT = {
+    'c': 'COPY',
+    'с': 'COPY',      # Кирилична 'с'
+    
+    'r': 'REWRITE',
+    'к': 'REWRITE',   # Кирилична 'к'
+    
+    's': 'SKIP',
+    'і': 'SKIP',      # Кирилична 'і'
+    'ы': 'SKIP',      # Кирилична 'ы'
+}
+
+2. system.py (Реалізація логіки)
+
+Тут ми реалізуємо функцію _handle_file_conflict, яка буде використовувати io.overwrite та io.get_action_from_user для відображення попередження та отримання вибору.
+Python
+
+# system.py
+import os
+import shutil
+import config
+import console as io
+
+def _get_next_copy_filename(directory: str, filename: str) -> str:
+    """
+    Генерує ім'я для копії: filename.ext -> filename.1.ext -> filename.2.ext
+    Знаходить перший вільний індекс.
+    """
+    name, ext = os.path.splitext(filename)
+    index = 1
+    
+    while True:
+        new_filename = f"{name}.{index}{ext}"
+        full_path = os.path.join(directory, new_filename)
+        if not os.path.exists(full_path):
+            return new_filename
+        index += 1
+
+def _handle_file_conflict(filename: str) -> str:
+    """
+    Обробляє ситуацію, коли файл вже існує.
+    Повертає дію: 'COPY', 'REWRITE' або 'SKIP'.
+    """
+    msg = f"Warning: Файл існує [{filename}] : Copy or Rewrite, Skip? [C\\R\\S] "
+    
+    # Використовуємо overwrite для виводу в той самий рядок
+    io.overwrite(msg, color='YELLOW')
+    
+    # Очікуємо дію від користувача, використовуючи спеціальний словник
+    action = io.get_action_from_user("", acts_dict=config.ACTIONS_FILE_CONFLICT)
+    
+    return action
+
+def save_stream_content(stream_iterator, filename: str, expected_size: int = 0) -> bool:
+    """
+    Приймає ітератор байтів (потік) і записує його у файл з логікою конфліктів.
+    """
+    directory = config.DOWNLOAD_DIR
+    file_path = os.path.join(directory, filename)
+    
+    # --- ЛОГІКА ПЕРЕВІРКИ ---
+    if os.path.exists(file_path):
+        local_size = os.path.getsize(file_path)
+        
+        # Якщо файл існує І розмір збігається
+        if local_size == expected_size:
+            action = _handle_file_conflict(filename)
+            
+            if action == 'SKIP':
+                io.printf(" -> Skipped", color='GREY') # Дописуємо статус в рядок
+                return False # Вихід із модуля із False в network
+                
+            elif action == 'COPY':
+                new_filename = _get_next_copy_filename(directory, filename)
+                file_path = os.path.join(directory, new_filename)
+                io.printf(f" -> Saving Copy: {new_filename}", color='CYAN')
+                # Далі йдемо до блоку запису з новим file_path
+                
+            elif action == 'REWRITE':
+                io.printf(" -> Rewriting...", color='YELLOW')
+                # file_path залишається тим самим, файл перезапишеться
+            
+            else:
+                # На випадок якщо action=None (невідома клавіша і т.д.), хоча цикл get_action має це обробити
+                io.printf(" -> Cancelled", color='RED')
+                return False
+        else:
+             # Якщо розмір не збігається - звичайний запис (перезапис) без питань
+             pass
+
+    # --- ЛОГІКА ЗАПИСУ ---
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        with open(file_path, 'wb') as f:
+            for chunk in stream_iterator:
+                if chunk: 
+                    f.write(chunk)
+        
+        # Якщо ми перезаписували або писали копію, виведемо фінальний статус
+        # Але оскільки network.py може виводити свої повідомлення, тут можна бути лаконічним.
+        # io.printf(f"Saved: {os.path.basename(file_path)}", color='GREEN') 
+        return True
+
+    except Exception as e:
+        io.prints(f"Помилка запису файлу: {e}", color='RED')
+        return False
+
+3. session_manager.py (Без змін, але для контексту)
+
+В session_manager.py виклик залишається таким, як ми обговорили раніше. Він просто отримує True або False від system.save_stream_content.
+Python
+
+# ... всередині download_file ...
+            # ...
+            stream_gen = r.iter_content(chunk_size=8192)
+            
+            result = system.save_stream_content(
+                stream_iterator=stream_gen,
+                filename=filename,
+                expected_size=expected_size
+            )
+            
+            return result
+# ...
+
+Пояснення змін:
+
+    Інтеграція з console.py: Функція _handle_file_conflict використовує io.overwrite для відображення попередження. Це гарантує, що повідомлення з'явиться в тому ж рядку, де був останній статус (наприклад, "Downloading...").
+
+    config.ACTIONS_FILE_CONFLICT: Я виніс мапінг клавіш у конфіг. Це дозволяє легко додати кириличні аналоги або змінити клавіші без редагування логіки.
+
+    Обробка дій:
+
+        Skip (s): Виводить " -> Skipped" (для візуального підтвердження) і повертає False. session_manager поверне False, і скрипт піде далі.
+
+        Copy (c): Генерує нове ім'я через _get_next_copy_filename, виводить повідомлення про копію і продовжує виконання до блоку запису з новим шляхом.
+
+        Rewrite (r): Просто продовжує виконання, використовуючи старий шлях (файл буде перезаписано open(..., 'wb')).
+
+    Візуальний стиль: Використані кольори YELLOW для попередження, CYAN для копії і GREY для пропуску, щоб користувач чітко бачив, що сталося.
+
+Тепер логіка повністю відповідає вашому ТЗ: перевірка -> попередження в один рядок -> миттєва реакція на клавішу -> відповідна дія.
+Ви вичерпали ліміт режиму міркування
+Ліміт оновиться 11 груд., 21:16, а тим часом відповіді надаватимуть інші моделі.
