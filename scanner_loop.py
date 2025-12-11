@@ -7,8 +7,7 @@ import re
 import config
 import network
 import console as io
-import transformer as tf
-import context
+import context as ct
 
 def final(history):
     last_url = history.get_last_successful()
@@ -18,36 +17,35 @@ def final(history):
 
 def run_scanner(initial_url):
     """Основний цикл сканування та взаємодії з користувачем."""
-    global LINK
-    global CURRENT
-    cycle = 1
+    #cycle = 1
     
     # Ініціалізація
     try:
-        #io.prints(f"[·] Спроба отримати елементи URL...", color='YELLOW')
-        LINK = LinkDetailed(initial_url)
+        #io.prints(f"[·] Спроба десереалізувати рядок URL...", color='YELLOW')
+        ct.LINK = ct.LinkDetailed(initial_url)
     except ValueError as e:
-        io.prints(f"[!] Помилка:", color='EDB')
+        io.prints(f"[!] Помилка:", color='RED')
         io.prints(f"{e}", color='REDB')
         return
-        
-    CURRENT = DataBlock(cycle, LINK.BeginIndex)
+
+    ct.CURRENT = ct.DataBlock(ct.LINK.BeginIndex)
     session = network.FileScannerSession()	# Have 1 shadow call of CURRENT.URL
     #history_tracker = history.ScannerHistory(initial_url)
     
-    io.prints(f"Базове посилання: {LINK.Base}")
-    io.prints(f"Поточний ID: [{LINK.BeginIndex}]")
-    if LINK.Remains:
-        io.prints(f"Закінчення URI: '{LINK.Remains}'")
+    io.prints(f"Базове посилання: {ct.LINK.Base}")
+    io.prints(f"Поточний ID: [{ct.LINK.BeginIndex}]")
+    if ct.LINK.Remains:
+        io.prints(f"Закінчення URI: '{ct.LINK.Remains}'")
     io.printf("Папка завантажень: ")
     io.prints(f"{config.DOWNLOAD_DIR}", color='CYAN')
 
     # Початкова перевірка сесії
-    io.prints("[+] Сесія ініціалізована успішно!\n")
-
     while True:
-        if CURRENT.Index < 0:
+        if ct.CURRENT.Index < 0:
             break
+        # 1. CURRENT.GetNext() повертає посилання, що зберігається всередині CURRENT.
+        # 2. CURRENT = ... ПЕРЕПРИСВОЮЄ мітку CURRENT на нове (або старе) посилання.
+        ct.CURRENT = ct.CURRENT.GetNext()
         
         #history_tracker.last_checked_url = target_url # Оновлюємо останній перевірений
 
@@ -55,7 +53,8 @@ def run_scanner(initial_url):
         #history_entry = history_tracker.get_result(current_id)
         
         # --- ВИКОНАННЯ ЗАПИТУ ---
-        response, status_code = session.check_url_head(CURRENT.URL)
+        #response, status_code = session.check_url_head(CURRENT.URL)
+        session.check_url_head()
         
         #if history_entry:
             # Якщо результат знайдено в історії, відтворюємо його
@@ -81,94 +80,52 @@ def run_scanner(initial_url):
 
         #history_tracker.last_checked_url = target_url # Оновлюємо останній перевірений
         
+        io.printf(f"\n{config.URL_SUFIX}{ct.CURRENT.Index} : Перевірка {ct.CURRENT.URL}...", color='YELLOW')
+        
         # --- ОБРОБКА КОДІВ ---
-        if CURRENT.State:
-            io.prints()
-        if status_code == 200:
-          if not CURRENT.Length:
-            status_code = 410
-            
-            if not is_cached:
-                # Отримуємо ім'я файлу лише якщо це новий запит
-                filename, c_length = session.get_meta_from_headers(response)
-                # Зберігаємо результат у історії
-                history_tracker.add_result(current_id, target_url, status_code, filename=filename, length=c_length)
-                if not c_length:
-                    c_length = 0
-                    filename = "Access Denied."
-                    status_code = 410
-                
-                data_transformer.print_result_in_queue(current_id, status_code, filename, c_length)
-            
-            history_tracker.add_success(target_url)
+        if ct.CURRENT.State:
+            io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : {ct.CURRENT.Size: >11} : {ct.CURRENT.FileName}", color='GREENB')
+        else:
+            if ct.CURRENT.Status == 403:
+                io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : Доступ заборонено (403)! Опції: ", color='REDB')
+            elif ct.CURRENT.Status > 403 and ct.CURRENT.Status < 500:
+                io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : Помилка - ({ct.CURRENT.Status}) : Файл не отримано!", color='YELLOWB')
+            else:
+                io.overwrite(f"{config.URL_SUFIX}{ct.CURRENT.Index} : Помилка - ({ct.CURRENT.Status}) : Неочікувана відповідь! ", color='REDB')
 
-            #io.print_msg(f"\nID-{current_id} : Файл знайдено : {filename}", color='GREENB')
+        options_msg, options_scope = config.OPTIONS_STRATEGY.get(ct.CURRENT.Status)
+        action = io.get_action_from_user(options_msg, options_scope)
+        #io.overwrite(config.PASSIVE_MSGS.get(action, config.PASSIVE_MSGS['DEFAULT'])(ct.CURRENT))
+        io.overwrite(*config.PASSIVE_MSGS.get(action, config.PASSIVE_MSGS['DEFAULT'])(ct.CURRENT))
+        
+        # Тут ми вже змінюємо основний об'єкт(не валідний index), тому перемальовувати треба рдразу
+        if action == 'RETURN':
+            ct.CURRENT.Index += 1
+        elif action == 'DECREMENT':
+            ct.CURRENT.Index -= 1
+        elif action == 'INCREMENT':
+            ct.CURRENT.Index += 1
+        elif action == 'TRY_BYPASS':
+            if session.renew_session():
+                continue # Повторна перевірка ТОГО Ж ID з новим скрепером
+        elif action == 'DOWNLOAD':
+            if session.download_file():
+                # Треба враховувати напрямок дії. а не просто (де)інкрементувати кожен раз.
+                io.overwrite(*config.PASSIVE_MSGS.get('DOWNLOADED')(ct.CURRENT))
+                ct.CURRENT.Index -= 1
+                continue
+        elif action == 'QUICK_EXIT':
+            io.prints("\n[!] Процес зупинено користувачем.", color = 'GREEN')
+            break
+        elif action == 'EXIT':
+            #final(history_tracker)
+            io.prints("\nВихід!", color = 'GREEN')
+            break
+        elif action == 'DEBUG':
+            io.prints("\n"+str(vars(ct.CURRENT)))
+            io.get_action_from_user()
+            continue
             
-            options_str = data_transformer.get_options('act_normal') 
-            action = io.get_action_from_user(options_str)
+        #io.overwrite(config.PASSIVE_MSGS.get(action, 0))
 
-            if action == 'RETURN':
-                current_id -= 1
-                # return-function
-            
-            if action == 'DECREMENT':
-                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
-                current_id -= 1
-            elif action == 'INCREMENT':
-                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
-                current_id += 1
-            elif action == 'DOWNLOAD':
-                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
-                session.download_file(target_url, filename)
-                current_id += 1 
-            elif action == 'QUICK_EXIT':
-                io.print_msg("[!] Процес зупинено користувачем.")
-                break
-            elif action == 'EXIT':
-                final(history_tracker)
-                break
-
-        elif status_code == 403:
-            if not is_cached:
-                # Зберігаємо результат у історії
-                history_tracker.add_result(current_id, target_url, status_code)
-            history_tracker.add_error(target_url, status_code)
-            
-            #action = io.handle_403_prompt(current_id)
-            io.overwrite_msg(f"\r{config.URL_ID_SUFIX}{current_id}: Доступ заборонено (403)! Опції: ", color='RED')
-            options_str = data_transformer.get_options('act_error')
-            action = io.get_action_from_user(options_str)
-            
-            if action == 'TRY_BYPASS':
-                if session.renew_session(target_url):
-                    continue # Повторна перевірка ТОГО Ж ID з новим скрепером
-            elif action == 'DECREMENT':
-                if current_id < 1:
-                    current_id -= 1
-                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
-                session.renew_session(get_target_url(base_url_prefix, current_id, base_url_postfix))
-            elif action == 'INCREMENT':
-                current_id += 1
-                data_transformer.rewrite_output(current_id, status_code, filename, c_length, action)
-                session.renew_session(get_target_url(base_url_prefix, current_id, base_url_postfix))
-            elif action in ('QUICK_EXIT', 'EXIT'):
-                if action == 'EXIT':
-                    final(history_tracker)
-                    break
-                io.print_msg("Процес зупинено.")
-                break
-                
-        # Обробка інших помилок
-        elif status_code == 404:
-            io.print_msg(f"ID-{current_id} : Файл не знайдено (404)", color='YELLOW')
-            history_tracker.add_error(target_url, status_code)
-            if action == 'INCREMENT':
-                current_id += 1
-            elif action == 'DECREMENT':
-                current_id -= 1
-        elif status_code == -1:
-            io.print_msg(f">({status_code}) : Unexpected Error:!", color='RED')
-        else: 
-            io.print_msg(f"ID-{current_id} : Помилка ({status_code}) або з'єднання/таймаут.", color='RED')
-            history_tracker.add_error(target_url, status_code)
-            current_id += 1
+#########################################################################################

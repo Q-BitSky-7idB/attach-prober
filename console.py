@@ -1,4 +1,4 @@
-﻿# io_handler.py
+﻿# console.py
 
 import sys
 import os
@@ -55,51 +55,39 @@ COLOR_MAP = {
     'CYAN': Fore.CYAN,
     'GREENB': Fore.LIGHTGREEN_EX,
     'CYANB': Fore.LIGHTCYAN_EX,
+    'REDB': Fore.LIGHTRED_EX,
     'DEFAULT': Style.RESET_ALL,
 }
 
-def printf_msg(message, color='DEFAULT'):
+def printf(message, color='DEFAULT'):
+    global LAST_LINE_SIZE
     """Виводить повідомлення з кольором та новим рядком."""
     sys.stdout.write(f"{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
     sys.stdout.flush()
     LAST_LINE_SIZE = len(message)
     
-def print_msg(message, color='DEFAULT'):
+def prints(message, color='DEFAULT'):
+    global LAST_LINE_SIZE
     """Виводить повідомлення з кольором та новим рядком."""
     sys.stdout.write(f"{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}\n")
     sys.stdout.flush()
+    LAST_LINE_SIZE = len(message)
 
-def overwrite_msg(message, color='DEFAULT'):
+def overwrite(message, color='DEFAULT'):
+    global LAST_LINE_SIZE
     """Перезаписує поточний рядок без нового рядка."""
+    if message == "":
+        return
     sys.stdout.write(f"\r{' ' * LAST_LINE_SIZE}\r{COLOR_MAP.get(color, Style.RESET_ALL)}{message}{Style.RESET_ALL}")
     sys.stdout.flush()
+    LAST_LINE_SIZE = len(message)
 
-def Xget_action_from_user(options_str):
-    """
-    Чекає негайного натискання клавіші та повертає відповідну дію з config.
-    """
-    sys.stdout.write(options_str)
-    sys.stdout.flush()
-
-    while True:
-        # Зчитуємо один символ негайно
-        key = msvcrt.getch().decode('utf-8').lower() if os.name == 'nt' else getch().lower()
-        
-        action = config.ACTIONS.get(key)
-        
-        if action:
-            # Очищаємо рядок після отримання символу
-            sys.stdout.write("\r" + " " * 120 + "\r")
-            sys.stdout.flush()
-            return action
-        # Ігноруємо невідомі клавіші та продовжуємо чекати
-
-def get_action_from_user(options_str):
+def get_action_from_user(options_str="", acts_dict=None):
     """
     Чекає негайного натискання клавіші, ігнорує нерозпізнані символи/стрілки,
     та повертає відповідну дію.
     """
-    sys.stdout.write(options_str)
+    sys.stdout.write("\n" + options_str)
     sys.stdout.flush()
 
     while True:
@@ -128,12 +116,14 @@ def get_action_from_user(options_str):
             # Ігноруємо нерозпізнані байти або неповні послідовності.
             continue
         
+        if not acts_dict:
+            acts_dict=config.ACTIONS
         # 4. Обробка дій
-        action = config.ACTIONS.get(key)
+        action = acts_dict.get(key)
         
         if action:
             # Очищаємо рядок після отримання символу
-            sys.stdout.write("\r" + " " * len(options_str) + " " * 30 + "\r") # Очищаємо рядок
+            sys.stdout.write("\r" + " " * len(options_str) + " " * 12 + "\r\033M") # Очищаємо рядок та повертаємось на позицію повідомлення
             sys.stdout.flush()
             return action
         
@@ -141,14 +131,3 @@ def get_action_from_user(options_str):
         # Якщо action None, просто продовжуємо цикл і чекаємо наступне натискання.
         # Це запобігає "крашу" та ігнорує невідомі клавіші.
         # Примітка: Додайте print(f"Невідома клавіша: {key}") для налагодження, якщо потрібно.
-
-def handle_403_prompt(current_id):
-    """
-    Інтерактивний запит при помилці 403.
-    Повертає обрану дію.
-    """
-    options_str = (
-        f"\r{Fore.RED}ID-{current_id}: Доступ заборонено (403)! Опції: "
-        f"[t/т] - Обхід, [c/с] - Декремент, [r/к] - Інкремент, [s/q] - Вийти. "
-    )
-    return get_action_from_user(options_str)

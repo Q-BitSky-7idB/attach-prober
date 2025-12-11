@@ -2,7 +2,7 @@
 
 import re
 from urllib.parse import urlparse
-import io_handler
+import console as io_handler
 
 # Поки що треба, що воно вело історію хочаб в середині себе. Проте з можоивістю 
 # екстракції. Постіний кравлінг файлових посилань може бути нетиповим і підозрілим 
