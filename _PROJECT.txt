@@ -1,4 +1,28 @@
-﻿
+﻿╝ÛŸÎ—X˜ЧF/‡ÇÚž€¯Ù…»Ýº¾Ö‰—Èì“ЎŒð@¸©²Î◘¥¦└ƒW:‹К
+
+[visualizing]: 
+                                                       network
+    [args]        [console]    [strategy]     [core]     [cffi/requestes]  [history]
+  get-args-url    
+                  print info 
+                                                           get request
+                                                           error
+                                                           ok
+                                x
+\strategies:
+
+1. 200 -> greenl	-> green
+          +decision	   _empty_space
+			  ↓next step
+
+2. 403 -> (auto) trying to bypass:
+2.1       200 -> 1.
+2.2       403 -> problem -> exit
+
+3. 404 -> yellowl	"410"				-> red
+          +decision(next only) | without download	   _empty_space
+                                                          ↓next step
+
 [explained]:
 
 1. отримання посилання як str
