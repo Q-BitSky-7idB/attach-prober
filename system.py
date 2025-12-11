@@ -1,95 +1,91 @@
 ﻿# system.py
 import os
 import shutil
-import console as io # Припускаємо, що get_actions_from_user тут
 import config
+import console as io
 
-class FileSystem:
+def _get_next_copy_filename(directory: str, filename: str) -> str:
     """
-    Клас для роботи з файловою системою, щоб розвантажити network/session модулі.
+    Генерує ім'я для копії: filename.ext -> filename.1.ext -> filename.2.ext
+    Знаходить перший вільний індекс.
     """
+    name, ext = os.path.splitext(filename)
+    index = 1
+    
+    while True:
+        new_filename = f"{name}.{index}{ext}"
+        full_path = os.path.join(directory, new_filename)
+        if not os.path.exists(full_path):
+            return new_filename
+        index += 1
 
-    @staticmethod
-    def _get_next_copy_filename(directory: str, filename: str) -> str:
-        """
-        Генерує ім'я для копії: filename.ext -> filename.1.ext -> filename.2.ext
-        Знаходить перший вільний індекс.
-        """
-        name, ext = os.path.splitext(filename)
-        index = 1
-        
-        while True:
-            # Формуємо нове ім'я: name.N.ext
-            new_filename = f"{name}.{index}{ext}"
-            full_path = os.path.join(directory, new_filename)
-            
-            if not os.path.exists(full_path):
-                return new_filename
-            index += 1
+def _handle_file_conflict(filename: str) -> str:
+    """
+    Обробляє ситуацію, коли файл вже існує.
+    Повертає дію: 'COPY', 'REWRITE' або 'SKIP'.
+    """
+    msg = f"Warning: Файл існує [{filename}] : Copy or Rewrite, Skip? [C\\R\\S] "
+    
+    # Використовуємо overwrite для виводу в той самий рядок
+    io.overwrite(msg, color='YELLOW')
+    
+    # Очікуємо дію від користувача, використовуючи спеціальний словник
+    action = io.get_action_from_user("", acts_dict=config.ACTIONS_FILE_CONFLICT)
+    
+    return action
 
-    @staticmethod
-    def save_stream_content(stream_iterator, filename: str, expected_size: int = 0) -> bool:
-        """
-        Приймає ітератор байтів (потік) і записує його у файл з логікою конфліктів.
+def save_stream_content(stream_iterator, filename: str, expected_size: int = 0) -> bool:
+    """
+    Приймає ітератор байтів (потік) і записує його у файл з логікою конфліктів.
+    """
+    directory = config.DOWNLOAD_DIR
+    file_path = os.path.join(directory, filename)
+    
+    # --- ЛОГІКА ПЕРЕВІРКИ ---
+    if os.path.exists(file_path):
+        local_size = os.path.getsize(file_path)
         
-        :param stream_iterator: генератор r.iter_content(...)
-        :param filename: оригінальне ім'я файлу
-        :param expected_size: розмір файлу з context.CURRENT.Size для звірки
-        """
-        directory = config.DOWNLOAD_DIR
-        file_path = os.path.join(directory, filename)
-        
-        # --- ЛОГІКА ПЕРЕВІРКИ ---
-        if os.path.exists(file_path):
-            local_size = os.path.getsize(file_path)
+        # Якщо файл існує І розмір збігається
+        if local_size == expected_size:
+            action = _handle_file_conflict(filename)
             
-            # Якщо файл існує І розмір збігається
-            if local_size == 			:
-                msg = f"Файл '{filename}' (Size: {local_size}) вже існує."
+            if action == 'SKIP':
+                io.printf(" -> Skipped", color='GREY') # Дописуємо статус в рядок
+                return False # Вихід із модуля із False в network
                 
-                # Викликаємо меню вибору (припускаємо, що повертає ключ або індекс)
-                # Потрібно адаптувати під реальний інтерфейс get_actions_from_user
-                choice = io.get_actions_from_user(
-                    msg, 
-                    options=["Overwrite (Перезаписати)", "Save as Copy (Зберегти копію)"]
-                )
+            elif action == 'COPY':
+                new_filename = _get_next_copy_filename(directory, filename)
+                file_path = os.path.join(directory, new_filename)
+                io.printf(f" -> Saving Copy: {new_filename}", color='CYAN')
+                # Далі йдемо до блоку запису з новим file_path
                 
-                if choice == 0: # Overwrite
-                    io.printf("Перезапис файлу...", color='YELLOW')
-                    # file_path залишається тим самим
-                    
-                elif choice == 1: # Copy
-                    new_filename = FileSystem._get_next_copy_filename(directory, filename)
-                    file_path = os.path.join(directory, new_filename)
-                    io.printf(f"Збереження як копія: {new_filename}", color='CYAN')
-                    
-                else:
-                    # Якщо користувач скасував або щось пішло не так
-                    io.prints("Завантаження скасовано користувачем.", color='GREY')
-                    return False
+            elif action == 'REWRITE':
+                io.printf(" -> Rewriting...", color='YELLOW')
+                # file_path залишається тим самим, файл перезапишеться
+            
             else:
-                # Якщо файл існує, але розмір різний - зазвичай просто перезаписуємо 
-                # або додаємо .part, але за вашим ТЗ (якщо немає збігу - звичайний запис)
-                # тож просто пишемо поверх (Overwrite).
-                pass
+                # На випадок якщо action=None (невідома клавіша і т.д.), хоча цикл get_action має це обробити
+                io.printf(" -> Cancelled", color='RED')
+                return False
+        else:
+             # Якщо розмір не збігається - звичайний запис (перезапис) без питань
+             pass
 
-        # --- ЛОГІКА ЗАПИСУ ---
-        try:
-            # Створення директорії, якщо її немає
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    # --- ЛОГІКА ЗАПИСУ ---
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-            with open(file_path, 'wb') as f:
-                # Транслюємо чанки з мережі прямо на диск
-                for chunk in stream_iterator:
-                    if chunk: 
-                        f.write(chunk)
-            
-            io.printf(f"Файл збережено: {os.path.basename(file_path)}", color='GREEN')
-            return True
+        with open(file_path, 'wb') as f:
+            for chunk in stream_iterator:
+                if chunk: 
+                    f.write(chunk)
+        
+        # Якщо ми перезаписували або писали копію, виведемо фінальний статус
+        # Але оскільки network.py може виводити свої повідомлення, тут можна бути лаконічним.
+        # io.printf(f"Saved: {os.path.basename(file_path)}", color='GREEN') 
+        return True
 
-        except Exception as e:
-            io.prints(f"Помилка запису файлу: {e}", color='RED')
-            return False
-
-# Створюємо екземпляр або використовуємо як статику, залежно від архітектури
-fs = FileSystem()
+    except Exception as e:
+        io.prints(f"Помилка запису файлу: {e}", color='RED')
+        return False
+        

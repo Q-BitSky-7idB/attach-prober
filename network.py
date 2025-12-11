@@ -1,9 +1,9 @@
-﻿# session_manager.py
+﻿# network.py
 
 import re
 import os
 import time
-import urllib.parse
+from urllib.parse import urlparse
 # Змінюємо імпорт: використовуємо requests з curl_cffi
 from curl_cffi import requests # <-- НОВА БІБЛІОТЕКА
 # Додаємо імпорт для специфічної помилки cURL, яка може бути причиною
@@ -13,6 +13,7 @@ from curl_cffi import CurlError
 import config
 import console as io
 import context
+import system
 
 # Конфігурація для імітації браузера
 BROWSER_IMPERSONATE = "chrome120"
@@ -31,8 +32,9 @@ TIMEOUT_BUFFER_SEC = 5 # Додатковий буфер часу поверх �
 class FileScannerSession:
     """Керує сесією curl_cffi та операціями з файлами."""
     
-    def __init__(self, initial_url_to_check): # <--- ЦЕЙ АРГУМЕНТ ПОТРІБЕН!
+    def __init__(self, initial_url=None): # <--- ЦЕЙ АРГУМЕНТ ПОТРІБЕН!
         # Сесія curl_cffi створюється лише один раз
+        #global CURRENT
         self.session = self._create_session()
         
         # 1. Атрибут для ТИПІЗАЦІЇ: Домени, які погано обробляють HEAD
@@ -41,7 +43,13 @@ class FileScannerSession:
         #self.domain_base_latency = {} 
         
         # Проводимо початкове "прогрівання"
-        self._cf_bypass(CURRENT.URL)
+        #self._cf_bypass(context.CURRENT.URL)
+        if context.CURRENT is not None:
+             self._cf_bypass(context.CURRENT.URL)
+        else:
+             # Обробка випадку, коли CURRENT ще не ініціалізовано
+             # Можна передати initial_url як дефолтний
+             pass
 
 
     def _create_session(self):
@@ -68,7 +76,7 @@ class FileScannerSession:
             # Якщо CF повертає JS-Challenge, curl_cffi обробляє його та встановлює куки.
             # Нам не потрібно читати response.content, куки вже встановлені.
             
-            io.printf(f"\r{' ' * 42}\r[+] Обхід CF успішний!", color='GREEN')
+            io.prints(f"\r{' ' * 42}\r[+] Обхід CF успішний!", color='GREEN')
             return True
             
         except Exception as e:
@@ -101,7 +109,7 @@ class FileScannerSession:
         Результат зберігається у self.domain_base_latency.
         rem:	⌛️ ✅ ⚠️ ❌ | 😎 🎪 ❓ ❗
         """
-        io_handler.print_msg(f"[/] Розпочато профілювання базової швидкості для {domain}...", color='MAGENTA')
+        io.prints(f"[/] Розпочато профілювання базової швидкості для {domain}...", color='MAGENTA')
         
         start_time = time.time()
         
@@ -122,25 +130,25 @@ class FileScannerSession:
             # Перевіряємо статус (206, 200, 3xx). 
             if 200 <= response.status_code < 400:
                 self.domain_base_latency[domain] = base_latency
-                io_handler.print_msg(
+                io.prints(
                     f"[+] Профілювання завершено. Базова затримка: {base_latency:.2f} сек. (Таймаут: {self._get_timeout(domain):.2f})", 
                     color='MAGENTA'
                 )
                 return base_latency
             else:
-                io_handler.print_msg(
+                io.prints(
                     f"[!] Профілювання не вдалося (статус {response.status_code}). Використовуємо таймаут за замовчуванням.", 
                     color='YELLOW'
                 )
                 return None
             
         except Exception as e:
-            io_handler.print_msg(f"[!] Профілювання не вдалося. {e}", color='RED')
+            io.prints(f"[!] Профілювання не вдалося. {e}", color='RED')
             return None
 
     def renew_session(self, url_to_check):
         """Створює новий об'єкт сесії та намагається перевірити URL для оновлення куків."""
-        io_handler.print_msg("[·] Спроба створення нової сесії та обхід CF...")
+        io.prints("[·] Спроба створення нової сесії та обхід CF...")
         
         # 1. Створюємо абсолютно нову сесію
         new_session = self._create_session()
@@ -162,10 +170,10 @@ class FileScannerSession:
             
             # Якщо успішно, замінюємо стару сесію на нову
             self.session = new_session
-            io_handler.print_msg("[+] Сесія успішно відновлена!", color='GREEN')
+            io.prints("[+] Сесія успішно відновлена!", color='GREEN')
             return True
         except Exception as e:
-            io_handler.print_msg(f"[!] Не вдалося відновити сесію:\n{e}", color='RED')
+            io.prints(f"[!] Не вдалося відновити сесію:\n{e}", color='RED')
             return False
 
     
@@ -173,11 +181,13 @@ class FileScannerSession:
 
     def check_url_head(self, url=None):
         """Виконує HEAD-запит, використовуючи адаптивний таймаут."""
-        if CURRENT and CURRENT.URL:
-          url = CURRENT.URL
+        if context.CURRENT is not None:
+          url = context.CURRENT.URL
+        else:
+          return
         if not url:
           raise Exception("EMPTY_URL")
-        global CURRENT
+        #global context.CURRENT
         
         try:
             #domain = urllib.parse.urlparse(url).netloc
@@ -191,11 +201,15 @@ class FileScannerSession:
                 impersonate=BROWSER_IMPERSONATE,
                 allow_redirects=True
             )
+            #response_string = response.text
             #if response.status_code == 403:
-            CURRENT.Status = response.status_code
-            CURRENT.Body = response
+            context.CURRENT.Status = response.status_code
+            context.CURRENT.Body = response
+            #print(f"\nX:{response.status_code}\nY:{response.headers};\n")
+            #io.get_action_from_user()
             return response, response.status_code
-        except Exception:
+        except Exception as e:
+            io.prints(f"Network(HEAD)Error:\n{e}")
             return None, -1
 
     def _check_url_with_range(self, url):
@@ -204,7 +218,7 @@ class FileScannerSession:
         використовуючи адаптивний таймаут. Це резервний метод.
         """
         try:
-            domain = urllib.parse.urlparse(url).netloc
+            domain = urlparse(url).netloc
             current_timeout = self._get_timeout(domain)
             
             io_handler.prints(f"Використовуємо таймаут: {current_timeout:.2f} сек. (Range)", color='BLUE') 
@@ -221,7 +235,7 @@ class FileScannerSession:
             return response, response.status_code
 
         except Exception as e:
-            io_handler.print_message(f"GET з Range також не вдався. {e}", color='RED')
+            io.prints(f"GET з Range також не вдався. {e}", color='RED')
             return None, -1
 
 
@@ -232,7 +246,7 @@ class FileScannerSession:
         2. Використовує HEAD, але переключається на GET+Range для "проблемних" доменів.
         """
         try:
-            domain = urllib.parse.urlparse(url).netloc
+            domain = urlparse(url).netloc
         except:
             domain = url
             
@@ -252,156 +266,34 @@ class FileScannerSession:
             return response, status
 
         # Помилка: (-1), яка є тайм-аутом або іншою помилкою. Типізація
-        io_handler.prints(f"HEAD-запит для {domain} зазнав невдачі. Вважаємо його 'нестандартним'.", color='YELLOW')
+        io.prints(f"HEAD-запит для {domain} зазнав невдачі. Вважаємо його 'нестандартним'.", color='YELLOW')
         
         # 4. Класифікація (Типізація)
         self.non_standard_head_domains[domain] = True
-        io_handler.prints(f"Домен {domain} додано до 'чорного списку'. Повторна перевірка...", color='RED')
+        io.prints(f"Домен {domain} додано до 'чорного списку'. Повторна перевірка...", color='RED')
         
         # 5. Повторюємо перевірку з Резервним (Range) методом
         return self._check_url_with_range(url)
     
     
-    # ... (get_filename_from_headers та download_file залишаються без змін) ...
-        
-    
-    def download_fileX(self, url, filename):
-        """Виконує завантаження файлу."""
-        io_handler.print_msg(f"Розпочато скачування: {filename}")
-        try:
-            # Використовуємо GET-запит з імітацією
-            with self.session.get(
-                url, 
-                stream=True, 
-                timeout=30, 
-                impersonate=BROWSER_IMPERSONATE # <-- Додаємо імітацію
-            ) as r:
-                r.raise_for_status()
-                file_path = os.path.join(config.DOWNLOAD_DIR, filename)
-                
-                # ... (логіка запису файлу залишається без змін)
-                with open(file_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
-        except Exception as e:
-            io_handler.print_msg(f"Не вдалося завантажити файл: {e}", color='RED')
+    # ... (download_file залишаються без змін) ...
 
-    def download_fileY(self, url, filename):
-        """
-        Виконує завантаження файлу. 
-        ВИПРАВЛЕНО: Прибрано with навколо self.session.get(), 
-        залишено лише with навколо об'єкта відповіді (r).
-        """
-        io_handler.print_msg(f"Розпочато скачування: {filename}")
-        try:
-            # 1. Виконуємо GET-запит (не використовуємо with тут)
-            r = self.session.get(
-                url, 
-                stream=True, 
-                timeout=30, 
-                impersonate=BROWSER_IMPERSONATE
-            )
-            
-            # 2. Використовуємо with r для гарантованого закриття з'єднання
-            with r:
-                r.raise_for_status()
-                file_path = os.path.join(config.DOWNLOAD_DIR, filename)
-                
-                # ... (логіка запису файлу залишається без змін)
-                with open(file_path, 'wb') as f:
-                    # r.iter_content може видати помилку, якщо r.raise_for_status() пройде
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
-        except Exception as e:
-            io_handler.print_msg(f"Не вдалося завантажити файл: {e}", color='RED')
-
-    def download_fileZ(self, url, filename):
-        """
-        Виконує завантаження файлу. 
-        Розширено обробку винятків для діагностики помилок рівня CurlError.
-        """
-        io_handler.print_msg(f"Розпочато скачування: {filename}")
-        r = None # Ініціалізуємо змінну відповіді
-        try:
-            # 1. Виконуємо GET-запит (не використовуємо with тут)
-            r = self.session.get(
-                url, 
-                stream=True, 
-                timeout=30, 
-                impersonate=BROWSER_IMPERSONATE
-            )
-            
-            # 2. Використовуємо with r для гарантованого закриття з'єднання
-            with r:
-                r.raise_for_status()
-                file_path = os.path.join(config.DOWNLOAD_DIR, filename)
-                
-                # ... (логіка запису файлу залишається без змін)
-                with open(file_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
-        
-        except CurlError as e:
-            # Специфічне захоплення помилок рівня cURL (ConnectionError, Timeout тощо)
-            io_handler.print_msg(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
-        
-        except Exception as e:
-            # Загальне захоплення. Виводимо тип помилки, щоб побачити, що саме сталося.
-            error_type = type(e).__name__
-            io_handler.print_msg(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
-
-    def download_fileW(self, url, filename):
-        """
-        Виконує завантаження файлу. 
-        Розширено обробку винятків для діагностики помилок рівня CurlError.
-        """
-        io_handler.print_msg(f"Розпочато скачування: {filename}")
-        r = None # Ініціалізуємо змінну відповіді
-        try:
-            # 1. Виконуємо GET-запит (не використовуємо with тут)
-            r = self.session.get(
-                url, 
-                stream=True, 
-                timeout=30, 
-                impersonate=BROWSER_IMPERSONATE
-            )
-            
-            # 2. Використовуємо with r для гарантованого закриття з'єднання
-            with r:
-                r.raise_for_status()
-                file_path = os.path.join(config.DOWNLOAD_DIR, filename)
-                
-                # ... (логіка запису файлу залишається без змін)
-                with open(file_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
-        
-        except CurlError as e:
-            # Специфічне захоплення помилок рівня cURL (ConnectionError, Timeout тощо)
-            io_handler.print_msg(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
-        
-        except Exception as e:
-            # Загальне захоплення. Виводимо тип помилки, щоб побачити, що саме сталося.
-            error_type = type(e).__name__
-            io_handler.print_msg(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
-
-    def download_file(self, url, filename):
+    def download_file(self, url=None, filename=None):
         """
         Виконує завантаження файлу. 
         ВИПРАВЛЕНО: Прибрано with r: та додано r.close() у finally блоці.
         Це усуває AttributeError: __enter__, оскільки Response об'єкт curl_cffi 
         не підтримує контекстний менеджер для цього випадку.
         """
-        io_handler.print_msg(f"Розпочато скачування: {filename}")
+        if not url:
+            url=context.CURRENT.URL
+        if not filename:
+            filename=context.CURRENT.FileName
+        #io.printf(f"Розпочато скачування: {filename}")
         r = None # Ініціалізуємо змінну відповіді
+        
+        expected_size = getattr(context.CURRENT, 'Size', 0)
+        
         try:
             # 1. Виконуємо GET-запит (для потокового завантаження)
             r = self.session.get(
@@ -411,26 +303,50 @@ class FileScannerSession:
                 impersonate=BROWSER_IMPERSONATE
             )
             
+            # ВИПРАВЛЕНО: Прибрано with навколо self.session.get(), 
+            # залишено лише with навколо об'єкта відповіді (r).
+             # # #
+            # 2. Використовуємо with r для гарантованого закриття з'єднання
+            #with r:
+            #    r.raise_for_status()
+            #    ...
+            
             # 2. Перевіряємо статус коду
             r.raise_for_status()
-            file_path = os.path.join(config.DOWNLOAD_DIR, filename)
+            #file_path = os.path.join(config.DOWNLOAD_DIR, filename)
             
+            # Виходить він пише по чанку разом у файл
             # 3. Записуємо файл
-            with open(file_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
+            #with open(file_path, 'wb') as f:
+            #    for chunk in r.iter_content(chunk_size=8192):
+            #        f.write(chunk)
             
-            io_handler.print_msg(f"Файл збережено до: {file_path}", color='GREEN')
+            # 3. ДЕЛЕГУЄМО ЗАПИС У SYSTEM
+            # Ми передаємо генератор (r.iter_content), а не байти.
+            # system.py буде "тягнути" дані з цього генератора.
+            stream_gen = r.iter_content(chunk_size=8192)
+            result = system.save_stream_content(
+                stream_iterator=stream_gen,
+                filename=filename,
+                expected_size=expected_size
+            )
+            
+            return result
+            
+            #io.printf(f"Файл збережено до: {file_path}", color='GREEN')
+            #return True
         
         except CurlError as e:
             # Специфічне захоплення помилок рівня cURL (ConnectionError, Timeout тощо)
-            io_handler.print_msg(f"Не вдалося завантажити файл (CurlError): {e}", color='RED')
+            io.prints(f"Не вдалося завантажити файл (CurlError):\n{e}", color='RED')
+            return False
         
         except Exception as e:
             # Загальне захоплення. Виводимо тип помилки, щоб побачити, що саме сталося.
             error_type = type(e).__name__
-            io_handler.print_msg(f"Не вдалося завантажити файл ({error_type}): {e}", color='RED')
-        
+            io.prints(f"Не вдалося завантажити файл ({error_type}):\n{e}", color='RED')
+            return False
+            
         finally:
             # Обов'язково закриваємо з'єднання, якщо об'єкт r було створено
             if r:
